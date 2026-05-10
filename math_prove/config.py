@@ -43,8 +43,101 @@ class SolverConfig:
         return asdict(self)
 
 
+BASE_PRESET: Dict[str, Any] = {
+    "confidence_threshold": 0.70,
+    "problem_timeout": 150.0,
+    "sandbox_timeout": 8,
+    "max_api_retries": 3,
+    "max_attempts_easy": 1,
+    "max_attempts_medium": 1,
+    "max_attempts_hard": 1,
+    "enable_sandbox": False,
+    "enable_ortools": False,
+    "enable_normalizer": False,
+    "normalizer_overwrite_answer": False,
+    "enable_equivalence_check": False,
+    "equivalence_can_fail_candidate": False,
+    "enable_llm_verify": False,
+    "enable_extract_stage": False,
+    "enable_candidate_selection": False,
+    "force_max_attempts": 1,
+}
+
+SAFE_PRESET: Dict[str, Any] = {
+    **BASE_PRESET,
+    "max_attempts_hard": 2,
+    "enable_normalizer": True,
+    "enable_llm_verify": True,
+    "force_max_attempts": None,
+}
+
+SAFE_PLUS_PRESET: Dict[str, Any] = {
+    **SAFE_PRESET,
+    "problem_timeout": 180.0,
+    "max_attempts_medium": 2,
+    "enable_equivalence_check": True,
+    "enable_extract_stage": True,
+    "enable_candidate_selection": True,
+}
+
+STRONG_PRESET: Dict[str, Any] = {
+    **SAFE_PLUS_PRESET,
+    "confidence_threshold": 0.75,
+    "problem_timeout": 240.0,
+    "sandbox_timeout": 10,
+    "max_api_retries": 5,
+    "max_attempts_hard": 3,
+    "enable_sandbox": True,
+    "enable_ortools": True,
+}
+
+
 ABLATION_PRESETS: Dict[str, Dict[str, Any]] = {
     "full": {},
+    "base": BASE_PRESET,
+    "base_verify": {**BASE_PRESET, "enable_llm_verify": True},
+    "base_normalizer": {**BASE_PRESET, "enable_normalizer": True},
+    "base_extract": {**BASE_PRESET, "enable_extract_stage": True},
+    "base_normalizer_extract": {
+        **BASE_PRESET,
+        "enable_normalizer": True,
+        "enable_extract_stage": True,
+    },
+    "base_multi": {
+        **BASE_PRESET,
+        "max_attempts_easy": 1,
+        "max_attempts_medium": 2,
+        "max_attempts_hard": 3,
+        "enable_candidate_selection": True,
+        "force_max_attempts": None,
+    },
+    "base_equivalence_observe": {
+        **BASE_PRESET,
+        "enable_normalizer": True,
+        "enable_equivalence_check": True,
+    },
+    "base_equivalence_strict": {
+        **BASE_PRESET,
+        "enable_normalizer": True,
+        "enable_equivalence_check": True,
+        "equivalence_can_fail_candidate": True,
+    },
+    "base_sandbox_observe": {**BASE_PRESET, "enable_sandbox": True},
+    "base_sandbox_verify": {
+        **BASE_PRESET,
+        "enable_sandbox": True,
+        "enable_llm_verify": True,
+    },
+    "base_ortools_verify": {
+        **BASE_PRESET,
+        "enable_sandbox": True,
+        "enable_ortools": True,
+        "enable_llm_verify": True,
+    },
+    "safe": SAFE_PRESET,
+    "safe_plus": SAFE_PLUS_PRESET,
+    "strong": STRONG_PRESET,
+    "official_stable": SAFE_PRESET,
     "no_sandbox": {"enable_sandbox": False, "enable_ortools": False},
     "no_ortools": {"enable_ortools": False},
     "no_normalizer": {"enable_normalizer": False, "enable_equivalence_check": False},
@@ -55,22 +148,6 @@ ABLATION_PRESETS: Dict[str, Dict[str, Any]] = {
     "single_candidate": {
         "force_max_attempts": 1,
         "enable_candidate_selection": False,
-    },
-    "official_stable": {
-        "max_attempts_easy": 1,
-        "max_attempts_medium": 1,
-        "max_attempts_hard": 2,
-        "enable_candidate_selection": False,
-        "normalizer_overwrite_answer": False,
-        "equivalence_can_fail_candidate": False,
-    },
-    "strong": {
-        "max_attempts_easy": 1,
-        "max_attempts_medium": 2,
-        "max_attempts_hard": 3,
-        "enable_candidate_selection": True,
-        "normalizer_overwrite_answer": False,
-        "equivalence_can_fail_candidate": False,
     },
 }
 
