@@ -5,6 +5,7 @@
 """
 import re
 import traceback
+import os
 from contextlib import redirect_stdout
 from io import StringIO
 from typing import Optional, Type
@@ -30,6 +31,8 @@ PRE_IMPORTS = [
 # z3 是可选依赖，导入失败不应阻止沙箱初始化
 _OPTIONAL_IMPORTS = [
     "from z3 import *",
+    "from ortools.linear_solver import pywraplp",
+    "from ortools.sat.python import cp_model",
 ]
 
 
@@ -48,10 +51,12 @@ class MathSandbox(IPythonInteractive):
         self,
         timeout: int = 10,
         max_out_len: int = 8192,
-        use_signals: bool = True,
+        use_signals: Optional[bool] = None,
         description: Optional[dict] = None,
         parser: Type[BaseParser] = JsonParser,
     ):
+        if use_signals is None:
+            use_signals = os.name != "nt"
         super().__init__(
             timeout=timeout,
             max_out_len=max_out_len,
@@ -96,7 +101,11 @@ class MathSandbox(IPythonInteractive):
         from IPython.core.interactiveshell import ExecutionResult as IPyResult
 
         code = self.extract_code(code)
-        wrapped = self.wrap_code_with_timeout(code, self.timeout)
+        wrapped = (
+            self.wrap_code_with_timeout(code, self.timeout)
+            if getattr(self, "_use_signals", True)
+            else code
+        )
 
         with StringIO() as io:
             with redirect_stdout(io):

@@ -1,4 +1,4 @@
-"""Prompt templates for the preliminary-round math solver.
+"""Prompt templates for MathSolve-Agent.
 
 The prompts keep one external agent identity while making the internal
 workflow explicit: classify, solve, verify, extract.
@@ -46,7 +46,8 @@ DOMAIN_STRATEGIES: Dict[str, str] = {
     "operations_research_optimization": (
         "State decision variables, objective, constraints, feasible region, "
         "optimality proof, and check whether LP, DP, KKT, duality, or graph "
-        "algorithms are appropriate."
+        "algorithms are appropriate. When the problem is LP/IP/CP or scheduling, "
+        "use OR-Tools style verification code if it is concise."
     ),
     "topology": (
         "Use definitions precisely. Check open/closed sets, compactness, "
@@ -77,6 +78,50 @@ DOMAIN_STRATEGIES: Dict[str, str] = {
 }
 
 
+DOMAIN_VERIFIER_RUBRICS: Dict[str, str] = {
+    "complex_analysis": (
+        "Complex analysis rubric: verify all singularities, whether poles are "
+        "inside the contour, residue calculations, contour orientation, real-axis "
+        "or principal-value issues, Jordan lemma / arc estimates, and parameter ranges."
+    ),
+    "partial_differential_equations": (
+        "PDE rubric: verify PDE type, all initial/boundary conditions, substitution "
+        "back into the equation, boundary satisfaction, uniqueness/regularity claims, "
+        "and domain assumptions."
+    ),
+    "ordinary_differential_equations": (
+        "ODE rubric: substitute the solution into the ODE, check initial/boundary "
+        "conditions, constants, domains, singular points, and uniqueness assumptions."
+    ),
+    "operations_research_optimization": (
+        "Optimization rubric: verify variable definitions, objective, all constraints, "
+        "candidate feasibility, objective value, KKT/duality/DP recurrence when relevant, "
+        "and proof of global optimality."
+    ),
+    "topology": (
+        "Topology rubric: verify definitions, both directions of equivalences, whether "
+        "a counterexample is needed, distinction between general topological and metric "
+        "spaces, and correct use of compactness/connectedness/countability."
+    ),
+}
+
+
+ERROR_TYPE_HINTS = [
+    "none",
+    "missing_condition",
+    "wrong_theorem_condition",
+    "calculation_error",
+    "missing_case_split",
+    "answer_not_simplified",
+    "not_answering_question",
+    "boundary_condition_error",
+    "domain_error",
+    "proof_gap",
+    "format_error",
+    "unknown",
+]
+
+
 COMMON_SYSTEM = """\
 You are MathSolve-Agent, a single Intern-S1 based mathematical reasoning agent.
 Your priority is correctness and a judgeable structured result.
@@ -92,15 +137,21 @@ Rules:
 
 CLASSIFY_SYSTEM = COMMON_SYSTEM + """\
 
-Classify the problem and plan the solution. Output ONLY one JSON object:
+Diagnose the problem and plan the solution. Output ONLY one JSON object:
 {
   "domain": "one of the allowed domain ids",
   "subtype": "short subtype",
+  "goal": "what the problem asks for",
   "difficulty": "easy|medium|hard",
   "answer_type": "formula|numeric|proof|choice|set|text|other",
   "required_methods": ["method 1", "method 2"],
   "solution_plan": ["step 1", "step 2", "step 3"],
-  "possible_pitfalls": ["pitfall 1", "pitfall 2"]
+  "possible_pitfalls": ["pitfall 1", "pitfall 2"],
+  "constraints_to_check": ["condition, boundary, parameter, domain, or theorem assumption"],
+  "risk_points": ["likely error point 1", "likely error point 2"],
+  "needs_case_split": false,
+  "needs_tool_verification": true,
+  "expected_answer_shape": "scalar|set|interval|matrix|proof conclusion|choice|..."
 }
 """
 
@@ -130,11 +181,22 @@ Verify the proposed solution. Output ONLY one JSON object:
   "passed": true,
   "confidence": 0.0,
   "issues": [],
+  "format_check": {"passed": true, "issues": []},
+  "question_target_check": {"passed": true, "issues": []},
+  "condition_check": {"passed": true, "issues": []},
+  "result_check": {"passed": true, "issues": []},
+  "judgeability_check": {"passed": true, "issues": []},
+  "error_type": "none",
+  "repair_instruction": "",
   "corrected_answer": "short corrected answer, or same as candidate answer"
 }
 
 Use confidence from 0 to 1. Mark passed=false if assumptions, theorem conditions,
 calculation, special cases, or answer format are doubtful.
+Allowed error_type values: none, missing_condition, wrong_theorem_condition,
+calculation_error, missing_case_split, answer_not_simplified,
+not_answering_question, boundary_condition_error, domain_error, proof_gap,
+format_error, unknown.
 """
 
 
@@ -159,7 +221,7 @@ Output ONLY one JSON object:
 
 EXTRACT_SYSTEM = COMMON_SYSTEM + """\
 
-Extract the final preliminary-round JSON. Output ONLY one JSON object:
+Extract the final judgeable JSON. Output ONLY one JSON object:
 {
   "problem_id": "string",
   "domain": "one of the allowed domain ids",
@@ -194,6 +256,15 @@ def strategy_for(domain: str) -> str:
         domain,
         "Use rigorous definitions, check theorem assumptions, compute carefully, "
         "and make the final answer concise.",
+    )
+
+
+def verifier_rubric_for(domain: str) -> str:
+    return DOMAIN_VERIFIER_RUBRICS.get(
+        domain,
+        "General verifier rubric: check answer format, question target, all stated "
+        "conditions, theorem assumptions, computations, missing cases, proof gaps, "
+        "and whether the final answer is judgeable.",
     )
 
 
@@ -234,7 +305,7 @@ def solve_messages(
                 f"Classification and plan:\n{_json(classification)}\n\n"
                 f"Domain-specific checks:\n{strategy_for(domain)}\n\n"
                 f"Attempt: {attempt} ({style}).\n"
-                f"Previous verifier feedback:\n{feedback}"
+                f"Previous verifier feedback and repair instruction:\n{feedback}"
             ),
         },
     ]
@@ -246,6 +317,7 @@ def verify_messages(
     candidate: Dict[str, Any],
     tool_result: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
+    domain = str(classification.get("domain", "other"))
     return [
         {"role": "system", "content": VERIFY_SYSTEM},
         {
@@ -253,9 +325,12 @@ def verify_messages(
             "content": (
                 f"Problem:\n{problem}\n\n"
                 f"Classification:\n{_json(classification)}\n\n"
+                f"Domain verifier rubric:\n{verifier_rubric_for(domain)}\n\n"
                 f"Candidate solution:\n{_json(candidate)}\n\n"
                 f"Tool verification result:\n{_json(tool_result or {})}\n\n"
-                "Check whether the final answer is correct, concise, and judgeable."
+                "Perform layered checks: format_check, question_target_check, "
+                "condition_check, result_check, and judgeability_check. If any layer "
+                "fails, set a specific error_type and a concrete repair_instruction."
             ),
         },
     ]

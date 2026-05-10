@@ -1,4 +1,4 @@
-"""Single-agent preliminary-round math solving pipeline."""
+"""Single-agent MathSolve-Agent solving pipeline."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from lagent.memory import Memory
 from lagent.schema import AgentMessage
 
 from . import prompts
+from .config import SolverConfig, load_config
+from .normalizer import equivalent_answers, normalize_answer
 from .parser import (
     CandidateSolution,
     ClassificationResult,
@@ -81,7 +83,16 @@ class MathSolverAgent:
         sandbox_timeout: int = SANDBOX_TIMEOUT,
         problem_timeout: float = PROBLEM_TIMEOUT,
         confidence_threshold: float = CONFIDENCE_THRESHOLD,
+        config: Optional[SolverConfig] = None,
+        config_path: Optional[str] = None,
+        ablation: str = "full",
     ) -> None:
+        self._config = config or load_config(config_path, ablation)
+        if config is None and config_path is None:
+            self._config.sandbox_timeout = sandbox_timeout
+            self._config.problem_timeout = problem_timeout
+            self._config.confidence_threshold = confidence_threshold
+
         key = api_key or os.environ.get("OPENAI_API_KEY", "ENV")
         base = api_base or os.environ.get(
             "LLM_API_BASE", "https://api.openai.com/v1/chat/completions"
@@ -94,13 +105,13 @@ class MathSolverAgent:
             temperature=temperature,
             max_new_tokens=max_new_tokens,
         )
-        self._sandbox = MathSandbox(timeout=sandbox_timeout)
+        self._sandbox = MathSandbox(timeout=self._config.sandbox_timeout)
         self._memory = Memory(recent_n=30)
         self._msg_logger = MessageLogger(name="math_prove", add_file_handler=True)
         self._temperature = temperature
         self._max_new_tokens = max_new_tokens
-        self._problem_timeout = problem_timeout
-        self._confidence_threshold = confidence_threshold
+        self._problem_timeout = self._config.problem_timeout
+        self._confidence_threshold = self._config.confidence_threshold
         self.last_run_log: Dict[str, Any] = {}
 
     def solve(
@@ -109,7 +120,7 @@ class MathSolverAgent:
         problem_id: str = "0",
         raw_metadata: Optional[Dict[str, Any]] = None,
     ) -> MathSolution:
-        """Solve one problem and always return a valid preliminary JSON object."""
+        """Solve one problem and always return a valid judgeable JSON object."""
 
         start = time.time()
         run_log: Dict[str, Any] = {
@@ -125,6 +136,7 @@ class MathSolverAgent:
             "api_status": "success",
             "latency_seconds": 0.0,
             "final_json": {},
+            "config": self._config.to_dict(),
         }
         self.last_run_log = run_log
         self._memory = Memory(recent_n=30)
@@ -178,6 +190,10 @@ class MathSolverAgent:
     def _finish(
         self, run_log: Dict[str, Any], solution: MathSolution, start_time: float
     ) -> MathSolution:
+        if self._config.enable_normalizer:
+            forms = normalize_answer(solution.answer, solution.answer_type)
+            solution.answer = forms.latex or solution.answer
+            run_log["answer_forms"] = forms.to_dict()
         run_log["latency_seconds"] = round(time.time() - start_time, 3)
         run_log["final_json"] = solution.model_dump(mode="json")
         self.last_run_log = run_log
@@ -211,9 +227,7 @@ class MathSolverAgent:
         run_log: Dict[str, Any],
         start_time: float,
     ) -> Tuple[CandidateSolution, VerificationResult]:
-        max_attempts = {"easy": 1, "medium": 2, "hard": 3}.get(
-            classification.difficulty, 2
-        )
+        max_attempts = self._config.attempts_for(classification.difficulty)
         previous_feedback = ""
         best_candidate: Optional[CandidateSolution] = None
         best_verification: Optional[VerificationResult] = None
@@ -227,6 +241,12 @@ class MathSolverAgent:
             candidate = self._solve_candidate(
                 problem, classification, attempt, previous_feedback, run_log
             )
+            if self._config.enable_normalizer:
+                forms = normalize_answer(candidate.final_answer, candidate.answer_type)
+                candidate.final_answer = forms.latex or candidate.final_answer
+                run_log.setdefault("answer_forms_by_candidate", {})[
+                    candidate.candidate_id
+                ] = forms.to_dict()
             tool_result = self._maybe_run_sandbox(candidate, classification, run_log)
             verification = self._verify_candidate(
                 problem, classification, candidate, tool_result, run_log
@@ -256,8 +276,13 @@ class MathSolverAgent:
             previous_feedback = "; ".join(verification.issues) or (
                 "Verifier confidence was below threshold; retry with a different method."
             )
+            previous_feedback = self._repair_feedback(verification, previous_feedback)
 
-        if classification.difficulty == "hard" and len(run_log["candidates"]) > 1:
+        if (
+            self._config.enable_candidate_selection
+            and classification.difficulty == "hard"
+            and len(run_log["candidates"]) > 1
+        ):
             selected = self._select_best(problem, classification, run_log)
             if selected is not None:
                 candidate = CandidateSolution(
@@ -328,6 +353,30 @@ class MathSolverAgent:
             candidate=candidate.model_dump(mode="json"),
             tool_result=tool_result,
         )
+        if not self._config.enable_llm_verify:
+            has_judgeable_answer = bool(
+                candidate.final_answer and candidate.final_answer != "unable_to_determine"
+            )
+            return VerificationResult(
+                passed=has_judgeable_answer,
+                confidence=0.6 if has_judgeable_answer else 0.0,
+                issues=[] if has_judgeable_answer else ["empty or fallback candidate answer"],
+                format_check={
+                    "passed": has_judgeable_answer,
+                    "issues": [] if has_judgeable_answer else ["empty or fallback answer"],
+                },
+                question_target_check={"passed": True, "issues": []},
+                condition_check={"passed": True, "issues": []},
+                result_check={"passed": True, "issues": []},
+                judgeability_check={
+                    "passed": has_judgeable_answer,
+                    "issues": [] if has_judgeable_answer else ["answer is not judgeable"],
+                },
+                error_type="none" if has_judgeable_answer else "format_error",
+                repair_instruction="" if has_judgeable_answer else "Return a concise non-empty final answer.",
+                corrected_answer=candidate.final_answer,
+            )
+
         try:
             raw = self._call_stage(f"verify_{candidate.candidate_id}", messages, run_log)
             verification = self._parse_or_fix(
@@ -337,14 +386,58 @@ class MathSolverAgent:
             issues = [f"Verifier fallback: {type(exc).__name__}: {exc}"]
             if tool_result and not tool_result.get("passed", True):
                 issues.append("Tool verification failed")
+            has_judgeable_answer = bool(
+                candidate.final_answer and candidate.final_answer != "unable_to_determine"
+            )
             verification = VerificationResult(
-                passed=bool(candidate.final_answer and candidate.final_answer != "unable_to_determine"),
-                confidence=0.55 if candidate.final_answer else 0.0,
+                passed=has_judgeable_answer,
+                confidence=0.55 if has_judgeable_answer else 0.0,
                 issues=issues,
+                format_check={
+                    "passed": has_judgeable_answer,
+                    "issues": [] if has_judgeable_answer else ["empty or fallback answer"],
+                },
+                question_target_check={"passed": True, "issues": []},
+                condition_check={"passed": True, "issues": []},
+                result_check={
+                    "passed": not (tool_result and not tool_result.get("passed", True)),
+                    "issues": ["tool verification failed"]
+                    if tool_result and not tool_result.get("passed", True)
+                    else [],
+                },
+                judgeability_check={
+                    "passed": has_judgeable_answer,
+                    "issues": [] if has_judgeable_answer else ["answer is not judgeable"],
+                },
+                error_type="unknown" if issues else "none",
+                repair_instruction="Review verifier fallback issues and produce a corrected concise answer.",
                 corrected_answer=candidate.final_answer,
             )
         if not verification.corrected_answer:
             verification.corrected_answer = candidate.final_answer
+        if self._config.enable_equivalence_check and tool_result and tool_result.get("passed"):
+            local_eq = equivalent_answers(
+                candidate.final_answer,
+                tool_result.get("output", ""),
+                candidate.answer_type or classification.answer_type,
+            )
+            run_log.setdefault("local_equivalence_checks", []).append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "against": "tool_output",
+                    **local_eq.to_dict(),
+                }
+            )
+            if local_eq.equivalent:
+                verification.confidence = max(verification.confidence, 0.85)
+            elif local_eq.method != "none":
+                verification.passed = False
+                verification.error_type = "calculation_error"
+                verification.repair_instruction = (
+                    "The candidate answer differs from executable verification output. "
+                    "Recompute and reconcile the final answer with the tool result."
+                )
+                verification.issues.append("Candidate answer differs from tool output")
         return verification
 
     def _select_best(
@@ -376,6 +469,19 @@ class MathSolverAgent:
         start_time: float,
     ) -> MathSolution:
         self._check_timeout(start_time)
+        if not self._config.enable_extract_stage:
+            payload = {
+                "problem_id": problem_id,
+                "domain": classification.domain,
+                "answer": candidate.final_answer or "unable_to_determine",
+                "answer_type": candidate.answer_type or classification.answer_type,
+                "reasoning_summary": candidate.reasoning_summary,
+                "key_steps": candidate.key_steps,
+                "learning_hint": self._fallback_learning_hint(classification.domain),
+                "verification": verification.model_dump(mode="json"),
+            }
+            return validate_solution_dict(payload, problem_id)
+
         messages = prompts.extract_messages(
             problem_id=problem_id,
             problem=problem,
@@ -404,6 +510,16 @@ class MathSolverAgent:
             solution.domain = classification.domain
         if solution.answer_type == "other" and classification.answer_type != "other":
             solution.answer_type = classification.answer_type
+        solution.verification.confidence = max(
+            solution.verification.confidence, verification.confidence
+        )
+        solution.verification.passed = solution.verification.passed or verification.passed
+        if verification.issues:
+            merged = list(solution.verification.issues)
+            for issue in verification.issues:
+                if issue not in merged:
+                    merged.append(issue)
+            solution.verification.issues = merged[:5]
         return solution
 
     def _maybe_run_sandbox(
@@ -415,6 +531,10 @@ class MathSolverAgent:
         code = (candidate.verification_code or "").strip()
         if not code:
             return None
+        if not self._config.enable_sandbox:
+            return {"skipped": True, "reason": "Sandbox disabled by config"}
+        if not self._config.enable_ortools and "ortools" in code.lower():
+            return {"skipped": True, "reason": "OR-Tools disabled by config"}
         if classification.domain not in TOOL_FRIENDLY_DOMAINS:
             return {"skipped": True, "reason": "Domain is not tool-friendly"}
 
@@ -479,6 +599,7 @@ class MathSolverAgent:
         max_retries: int = MAX_API_RETRIES,
     ) -> str:
         last_error = ""
+        max_retries = self._config.max_api_retries if max_retries == MAX_API_RETRIES else max_retries
         for attempt in range(max_retries):
             try:
                 response = self._llm.chat(
@@ -524,6 +645,29 @@ class MathSolverAgent:
         return "Identify the applicable theorem conditions before applying a formula."
 
     @staticmethod
+    def _repair_feedback(verification: VerificationResult, fallback: str) -> str:
+        parts: List[str] = []
+        if verification.error_type and verification.error_type != "none":
+            parts.append(f"error_type={verification.error_type}")
+        if verification.repair_instruction:
+            parts.append(f"repair_instruction={verification.repair_instruction}")
+        if verification.issues:
+            parts.append("issues=" + "; ".join(verification.issues[:5]))
+        for name in (
+            "format_check",
+            "question_target_check",
+            "condition_check",
+            "result_check",
+            "judgeability_check",
+        ):
+            layer = getattr(verification, name)
+            if not layer.passed or layer.issues:
+                parts.append(
+                    f"{name}: passed={layer.passed}; issues={'; '.join(layer.issues)}"
+                )
+        return "\n".join(parts) if parts else fallback
+
+    @staticmethod
     def _heuristic_classification(problem: str) -> ClassificationResult:
         text = problem.lower()
         checks = [
@@ -550,11 +694,19 @@ class MathSolverAgent:
         return ClassificationResult(
             domain=domain,
             subtype="heuristic",
+            goal="solve the stated problem",
             difficulty=difficulty,
             answer_type=answer_type,
             required_methods=[],
             solution_plan=["Understand the target", "Apply a suitable method", "Check the result"],
             possible_pitfalls=["Classification was produced by fallback heuristics"],
+            constraints_to_check=["all stated conditions", "answer format"],
+            risk_points=["heuristic diagnosis may miss a specific theorem condition"],
+            needs_case_split=any(
+                word in text for word in ["case", "parameter", "depending", "分类", "参数"]
+            ),
+            needs_tool_verification=domain in TOOL_FRIENDLY_DOMAINS and answer_type != "proof",
+            expected_answer_shape=answer_type,
         )
 
     def _check_timeout(self, start_time: float) -> None:

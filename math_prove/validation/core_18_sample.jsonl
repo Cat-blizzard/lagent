@@ -1,0 +1,6 @@
+{"problem_id":"core_001","problem_text":"Find all real roots of x^4 - 5x^2 + 4 = 0.","domain":"calculus_real_analysis","answer_type":"set","expected_answer":"{-2,-1,1,2}"}
+{"problem_id":"core_002","problem_text":"Compute the residue of f(z)=(z^2+1)/(z-i) at z=i.","domain":"complex_analysis","answer_type":"numeric","expected_answer":"0"}
+{"problem_id":"core_003","problem_text":"Maximize 3x + 4y subject to x + 2y <= 8, 3x + y <= 9, x >= 0, y >= 0. Give the maximum value.","domain":"operations_research_optimization","answer_type":"numeric","expected_answer":"20"}
+{"problem_id":"core_004","problem_text":"Evaluate the integral from 0 to 1 of 2x dx.","domain":"calculus_real_analysis","answer_type":"numeric","expected_answer":"1"}
+{"problem_id":"core_005","problem_text":"For the matrix [[1,2],[0,3]], list its eigenvalues as a set.","domain":"linear_algebra","answer_type":"set","expected_answer":"{1,3}"}
+{"problem_id":"core_006","problem_text":"In a connected graph with n vertices and n-1 edges, what special type of graph is it?","domain":"graph_theory","answer_type":"text","expected_answer":"tree"}

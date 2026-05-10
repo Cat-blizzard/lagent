@@ -1,4 +1,4 @@
-"""Strict JSON parsing and Pydantic schemas for preliminary-round outputs."""
+"""Strict JSON parsing and Pydantic schemas for MathSolve-Agent outputs."""
 
 from __future__ import annotations
 
@@ -57,6 +57,20 @@ DOMAIN_ALIASES = {
 
 ANSWER_TYPES = {"formula", "numeric", "proof", "choice", "set", "text", "other"}
 DIFFICULTIES = {"easy", "medium", "hard"}
+ERROR_TYPES = {
+    "none",
+    "missing_condition",
+    "wrong_theorem_condition",
+    "calculation_error",
+    "missing_case_split",
+    "answer_not_simplified",
+    "not_answering_question",
+    "boundary_condition_error",
+    "domain_error",
+    "proof_gap",
+    "format_error",
+    "unknown",
+}
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -102,10 +116,47 @@ def normalize_difficulty(value: Any) -> str:
     return raw if raw in DIFFICULTIES else "medium"
 
 
+def normalize_error_type(value: Any) -> str:
+    raw = str(value or "none").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "missing_boundary_condition": "boundary_condition_error",
+        "boundary_error": "boundary_condition_error",
+        "wrong_domain": "domain_error",
+        "format": "format_error",
+        "not_answering": "not_answering_question",
+        "not_answered": "not_answering_question",
+        "wrong_calculation": "calculation_error",
+        "compute_error": "calculation_error",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in ERROR_TYPES else "unknown"
+
+
+class LayerCheck(BaseModel):
+    passed: bool = True
+    issues: List[str] = Field(default_factory=list)
+
+    @field_validator("issues", mode="before")
+    @classmethod
+    def issues_as_list(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [_trim(item, 240) for item in value if str(item).strip()]
+        return [_trim(value, 240)] if str(value).strip() else []
+
+
 class VerificationResult(BaseModel):
     passed: bool = False
     confidence: float = 0.0
     issues: List[str] = Field(default_factory=list)
+    format_check: LayerCheck = Field(default_factory=LayerCheck)
+    question_target_check: LayerCheck = Field(default_factory=LayerCheck)
+    condition_check: LayerCheck = Field(default_factory=LayerCheck)
+    result_check: LayerCheck = Field(default_factory=LayerCheck)
+    judgeability_check: LayerCheck = Field(default_factory=LayerCheck)
+    error_type: str = "none"
+    repair_instruction: str = ""
     corrected_answer: str = Field(default="", exclude=True)
 
     @field_validator("confidence")
@@ -126,6 +177,16 @@ class VerificationResult(BaseModel):
             return [_trim(item, 300) for item in value if str(item).strip()]
         return [_trim(value, 300)] if str(value).strip() else []
 
+    @field_validator("error_type")
+    @classmethod
+    def error_type_allowed(cls, value: Any) -> str:
+        return normalize_error_type(value)
+
+    @field_validator("repair_instruction")
+    @classmethod
+    def repair_instruction_short(cls, value: str) -> str:
+        return _trim(value, 500)
+
     @field_validator("corrected_answer")
     @classmethod
     def corrected_answer_short(cls, value: str) -> str:
@@ -135,11 +196,17 @@ class VerificationResult(BaseModel):
 class ClassificationResult(BaseModel):
     domain: str = "other"
     subtype: str = ""
+    goal: str = ""
     difficulty: str = "medium"
     answer_type: str = "other"
     required_methods: List[str] = Field(default_factory=list)
     solution_plan: List[str] = Field(default_factory=list)
     possible_pitfalls: List[str] = Field(default_factory=list)
+    constraints_to_check: List[str] = Field(default_factory=list)
+    risk_points: List[str] = Field(default_factory=list)
+    needs_case_split: bool = False
+    needs_tool_verification: bool = False
+    expected_answer_shape: str = ""
 
     @field_validator("domain")
     @classmethod
@@ -156,7 +223,14 @@ class ClassificationResult(BaseModel):
     def answer_type_allowed(cls, value: Any) -> str:
         return normalize_answer_type(value)
 
-    @field_validator("required_methods", "solution_plan", "possible_pitfalls", mode="before")
+    @field_validator(
+        "required_methods",
+        "solution_plan",
+        "possible_pitfalls",
+        "constraints_to_check",
+        "risk_points",
+        mode="before",
+    )
     @classmethod
     def list_fields(cls, value: Any) -> List[str]:
         if value is None:
@@ -165,9 +239,9 @@ class ClassificationResult(BaseModel):
             return [_trim(item, 300) for item in value if str(item).strip()]
         return [_trim(value, 300)] if str(value).strip() else []
 
-    @field_validator("subtype")
+    @field_validator("subtype", "goal", "expected_answer_shape")
     @classmethod
-    def subtype_short(cls, value: str) -> str:
+    def text_short(cls, value: str) -> str:
         return _trim(value, 120)
 
 
@@ -239,7 +313,7 @@ class SelectionResult(BaseModel):
 
 
 class MathSolution(BaseModel):
-    """Final judgeable JSON object for one preliminary-round problem."""
+    """Final judgeable JSON object for one math problem."""
 
     problem_id: str
     domain: str = "other"

@@ -1,4 +1,4 @@
-"""Preliminary-round MathSolve-Agent package."""
+"""MathSolve-Agent package."""
 
 from .parser import (
     CandidateSolution,
@@ -11,6 +11,9 @@ from .parser import (
     parse_and_validate,
     solution_to_json,
 )
+from .config import SolverConfig, load_config
+from .normalizer import AnswerForms, EquivalenceResult, equivalent_answers, normalize_answer
+from .validator import ValidationReport, validate_results
 
 
 def __getattr__(name):
@@ -24,6 +27,7 @@ def __getattr__(name):
         return MathSandbox
     raise AttributeError(name)
 
+
 __all__ = [
     "MathSandbox",
     "MathSolverAgent",
@@ -36,4 +40,12 @@ __all__ = [
     "fallback_solution",
     "parse_and_validate",
     "solution_to_json",
+    "SolverConfig",
+    "load_config",
+    "AnswerForms",
+    "EquivalenceResult",
+    "normalize_answer",
+    "equivalent_answers",
+    "ValidationReport",
+    "validate_results",
 ]

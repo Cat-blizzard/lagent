@@ -1,0 +1,14 @@
+confidence_threshold: 0.70
+problem_timeout: 180
+sandbox_timeout: 10
+max_api_retries: 5
+max_attempts_easy: 1
+max_attempts_medium: 2
+max_attempts_hard: 3
+enable_sandbox: true
+enable_ortools: true
+enable_normalizer: true
+enable_equivalence_check: true
+enable_llm_verify: true
+enable_extract_stage: true
+enable_candidate_selection: true

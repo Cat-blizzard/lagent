@@ -1,4 +1,4 @@
-"""CLI for the preliminary-round MathSolve-Agent."""
+"""CLI for MathSolve-Agent."""
 
 from __future__ import annotations
 
@@ -42,10 +42,18 @@ def run_single_demo(
     model_type: str = "gpt-4o-mini",
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    config_path: Optional[str] = None,
+    ablation: str = "full",
 ) -> None:
     from .agent import MathSolverAgent
 
-    agent = MathSolverAgent(model_type=model_type, api_key=api_key, api_base=api_base)
+    agent = MathSolverAgent(
+        model_type=model_type,
+        api_key=api_key,
+        api_base=api_base,
+        config_path=config_path,
+        ablation=ablation,
+    )
     item = SAMPLE_PROBLEMS[0]
     start = time.time()
     solution = agent.solve(item["problem_text"], item["problem_id"])
@@ -72,6 +80,8 @@ def run_batch(
     results_json_path: Optional[str] = None,
     log_dir: Optional[str] = None,
     summary_path: Optional[str] = None,
+    config_path: Optional[str] = None,
+    ablation: str = "full",
 ) -> Dict[str, Any]:
     from .agent import MathSolverAgent
 
@@ -92,7 +102,13 @@ def run_batch(
         existing_results = _read_existing_results(output)
 
     mode = "a" if resume and output.exists() else "w"
-    agent = MathSolverAgent(model_type=model_type, api_key=api_key, api_base=api_base)
+    agent = MathSolverAgent(
+        model_type=model_type,
+        api_key=api_key,
+        api_base=api_base,
+        config_path=config_path,
+        ablation=ablation,
+    )
 
     total = len(problems)
     processed = 0
@@ -171,6 +187,8 @@ def run_batch(
         "schema_error_count": len(schema_errors),
         "schema_errors": schema_errors[:20],
         "fallback_or_unpassed_count_this_run": fallback_count,
+        "config_path": config_path,
+        "ablation": ablation,
         "elapsed_seconds": round(time.time() - started_at, 3),
     }
     summary.write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -342,7 +360,7 @@ def _resolve_api_config(args: argparse.Namespace) -> Tuple[Optional[str], Option
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Preliminary-round MathSolve-Agent")
+    parser = argparse.ArgumentParser(description="MathSolve-Agent single-agent math solver")
     parser.add_argument("--input", "-i", type=str, default=None, help="Input JSON/JSONL/CSV/XLSX")
     parser.add_argument(
         "--output",
@@ -360,6 +378,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", "-n", type=int, default=None, help="Only process first N rows")
     parser.add_argument("--resume", action="store_true", help="Skip IDs already in output JSONL")
     parser.add_argument("--demo", action="store_true", help="Run a single demo problem")
+    parser.add_argument("--config", type=str, default=None, help="JSON/YAML runtime config")
+    parser.add_argument(
+        "--ablation",
+        type=str,
+        default="full",
+        help="Ablation preset: full, no_sandbox, no_ortools, no_normalizer, no_equivalence, no_llm_verify, no_extract, single_candidate",
+    )
     return parser
 
 
@@ -369,7 +394,7 @@ def main() -> None:
     api_key, api_base = _resolve_api_config(args)
 
     if args.demo or not args.input:
-        run_single_demo(args.model, api_key, api_base)
+        run_single_demo(args.model, api_key, api_base, args.config, args.ablation)
         return
 
     run_batch(
@@ -383,6 +408,8 @@ def main() -> None:
         results_json_path=args.results_json,
         log_dir=args.log_dir,
         summary_path=args.summary,
+        config_path=args.config,
+        ablation=args.ablation,
     )
 
 
