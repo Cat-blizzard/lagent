@@ -96,6 +96,53 @@ $env:LLM_API_BASE = "https://your-endpoint/v1/chat/completions"
 
 不要把真实 API Key 写入代码、日志或提交到 GitHub。
 
+## InternLM / Intern-S1 API Strategy
+
+参考官方文档：
+
+- [多轮对话 Chat API](https://internlm.intern-ai.org.cn/doc/docs/Chat/)
+- [用户鉴权](https://internlm.intern-ai.org.cn/doc/docs/%E7%94%A8%E6%88%B7%E9%89%B4%E6%9D%83/)
+- [模型列表](https://internlm.intern-ai.org.cn/doc/docs/%E6%A8%A1%E5%9E%8B%E5%88%97%E8%A1%A8/)
+- [Claude-like API](https://internlm.intern-ai.org.cn/doc/docs/API_DOCUMENTATION_ZH/)
+
+本项目当前基于 `lagent.llms.GPTAPI`，它会直接向 `api_base` 指定的完整 URL 发起 `POST` 请求，所以推荐使用 OpenAI-compatible Chat API：
+
+```powershell
+$env:OPENAI_API_KEY = "your-internlm-api-token"
+$env:LLM_API_BASE = "https://chat.intern-ai.org.cn/api/v1/chat/completions"
+```
+
+然后运行：
+
+```powershell
+uv run python -m math_prove.main `
+  -i data\problems.jsonl `
+  -o outputs\results.jsonl `
+  --results-json outputs\results.json `
+  --log-dir outputs\logs `
+  --model intern-s1 `
+  --resume
+```
+
+注意两种写法的区别：
+
+| 使用方式 | 地址写法 | 鉴权方式 |
+| --- | --- | --- |
+| 本项目 `GPTAPI` | `https://chat.intern-ai.org.cn/api/v1/chat/completions` | 环境变量里只填 token，代码会自动加 `Authorization: Bearer ...` |
+| OpenAI Python SDK | `base_url="https://chat.intern-ai.org.cn/api/v1/"` | `api_key` 填 token，不手写 `Bearer` |
+| 原生 requests/curl | `https://chat.intern-ai.org.cn/api/v1/chat/completions` | 请求头写 `Authorization: Bearer YOUR_API_TOKEN` |
+
+官方策略中和本项目最相关的点：
+
+- 默认每用户每分钟限制约 30 次请求；本项目批量跑题时建议保持顺序执行，不要并发压测。
+- `intern-s1-pro`、`intern-s1`、`intern-s1-mini` 支持 `thinking_mode` 控制深度思考模式；当前 `GPTAPI` 路径未额外注入该字段，通常使用模型默认行为即可。
+- Chat API 支持的常用参数包括 `model`、`messages`、`temperature`、`top_p`、`stream`、`max_tokens`、`tools`；本项目主要使用非流式 `messages` 调用。
+- API 侧 120 秒仍未输出完成时可能返回当前已生成结果；因此本项目保留本地 JSON 修复、fallback 和单题异常隔离。
+- API Token 有效期约 6 个月，且只在创建时完整展示；请用环境变量或安全密钥管理，不要写入仓库。
+- 常见错误需要重点处理：鉴权失败、token 过期、模型不存在、messages 格式错误、频率或 token 限制超限。
+
+Claude-like `/v1/messages` 也是官方支持的接口，但它使用 `x-api-key` 鉴权、`system` 独立字段和 `content[0].text` 响应结构；这和当前 `GPTAPI` 的 OpenAI-compatible 返回格式不同。除非后续专门新增一个 Claude-like client，否则不建议直接把 `LLM_API_BASE` 改成 `/v1/messages`。
+
 ## Run Demo
 
 ```powershell
@@ -283,4 +330,3 @@ outputs/
 *.log
 .env
 ```
-
