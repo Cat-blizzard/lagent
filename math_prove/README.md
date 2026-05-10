@@ -11,7 +11,7 @@
 - 分层 verifier：`format_check`、`question_target_check`、`condition_check`、`result_check`、`judgeability_check`。
 - 领域级 verifier rubric：已重点覆盖复分析、ODE/PDE、优化/运筹、拓扑。
 - 动态候选策略：简单题少调用，困难题可生成多个候选并比较选择。
-- Answer Normalizer：保留原答案、LaTeX 形式和 canonical 形式，支持基础等价判断。
+- Answer Normalizer：保留原答案、LaTeX 形式和 canonical 形式，默认不覆盖最终答案。
 - 本地 schema + 等价验证器：可检查结果文件是否可解析、字段是否完整、答案是否等价。
 - 提交前体检：检查重复题号、缺题、空答案、Markdown 污染、乱码、低质量答案、日志缺失等工程风险。
 - 批量容错：单题异常不会中断整批任务，支持 `--resume` 断点续跑。
@@ -191,6 +191,15 @@ uv run python -m math_prove.main `
 | `--config` | 指定运行配置 |
 | `--ablation` | 指定消融 preset |
 
+## Conservative Answer Control
+
+为了避免 verifier、normalizer 或本地等价验证器把原本正确的答案改坏，默认策略偏保守：
+
+- Problem Diagnosis 是强提示，不是硬约束；solver 可以根据题目条件修正诊断和方法。
+- Verifier 的 `corrected_answer` 不会无条件覆盖候选答案。只有在 `verification.passed=true`、`confidence >= 0.80`、答案非空、不是 `unable_to_determine`，并且改动足够小或通过工具输出等价验证时才会覆盖。
+- Normalizer 默认只生成 `answer_forms` 日志，不改写最终 `answer`。如确实要让它覆盖答案，可在配置中设置 `normalizer_overwrite_answer: true`。
+- 本地等价验证器默认只提升通过验证的置信度；失败时只写 risk warning，不直接否决候选。若调试时想让可靠工具验证否决候选，可设置 `equivalence_can_fail_candidate: true` 或使用 `strict_equivalence` preset。
+
 ## Output Schema
 
 每道题输出一个严格 JSON 对象：
@@ -276,13 +285,33 @@ uv run python -m math_prove.evaluate `
 
 ```text
 full
+official_stable
+strong
 no_sandbox
 no_ortools
 no_normalizer
 no_equivalence
+strict_equivalence
 no_llm_verify
 no_extract
 single_candidate
+```
+
+建议正式批量运行优先试：
+
+```powershell
+uv run python -m math_prove.main `
+  -i data\problems.jsonl `
+  -o outputs\results.jsonl `
+  --model intern-s1 `
+  --ablation official_stable `
+  --resume
+```
+
+需要更强求解但耗时更高时使用：
+
+```powershell
+--ablation strong
 ```
 
 ## Local Checks

@@ -383,7 +383,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ablation",
         type=str,
         default="full",
-        help="Ablation preset: full, no_sandbox, no_ortools, no_normalizer, no_equivalence, no_llm_verify, no_extract, single_candidate",
+        help=(
+            "Ablation preset: full, official_stable, strong, no_sandbox, "
+            "no_ortools, no_normalizer, no_equivalence, strict_equivalence, "
+            "no_llm_verify, no_extract, single_candidate"
+        ),
     )
     return parser
 

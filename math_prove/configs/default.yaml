@@ -8,7 +8,10 @@ max_attempts_hard: 3
 enable_sandbox: true
 enable_ortools: true
 enable_normalizer: true
+normalizer_overwrite_answer: false
 enable_equivalence_check: true
+equivalence_can_fail_candidate: false
 enable_llm_verify: true
 enable_extract_stage: true
 enable_candidate_selection: true
+verifier_correction_min_confidence: 0.80

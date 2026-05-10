@@ -302,7 +302,11 @@ def solve_messages(
             "role": "user",
             "content": (
                 f"Problem:\n{problem}\n\n"
-                f"Classification and plan:\n{_json(classification)}\n\n"
+                f"Problem diagnosis and plan:\n{_json(classification)}\n\n"
+                "Treat the diagnosis as a strong but revisable hypothesis. "
+                "If the problem statement supports a better domain, method, or "
+                "answer shape, correct the diagnosis in your reasoning and solve "
+                "according to the actual conditions.\n\n"
                 f"Domain-specific checks:\n{strategy_for(domain)}\n\n"
                 f"Attempt: {attempt} ({style}).\n"
                 f"Previous verifier feedback and repair instruction:\n{feedback}"

@@ -7,6 +7,7 @@ import os
 import re
 import time
 import traceback
+from difflib import SequenceMatcher
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -192,8 +193,14 @@ class MathSolverAgent:
     ) -> MathSolution:
         if self._config.enable_normalizer:
             forms = normalize_answer(solution.answer, solution.answer_type)
-            solution.answer = forms.latex or solution.answer
-            run_log["answer_forms"] = forms.to_dict()
+            form_record = forms.to_dict()
+            form_record["overwrote_answer"] = False
+            if self._config.normalizer_overwrite_answer and self._is_safe_normalization(
+                forms, solution.answer_type
+            ):
+                solution.answer = forms.latex or solution.answer
+                form_record["overwrote_answer"] = True
+            run_log["answer_forms"] = form_record
         run_log["latency_seconds"] = round(time.time() - start_time, 3)
         run_log["final_json"] = solution.model_dump(mode="json")
         self.last_run_log = run_log
@@ -243,17 +250,38 @@ class MathSolverAgent:
             )
             if self._config.enable_normalizer:
                 forms = normalize_answer(candidate.final_answer, candidate.answer_type)
-                candidate.final_answer = forms.latex or candidate.final_answer
-                run_log.setdefault("answer_forms_by_candidate", {})[
-                    candidate.candidate_id
-                ] = forms.to_dict()
+                form_record = forms.to_dict()
+                form_record["overwrote_answer"] = False
+                if self._config.normalizer_overwrite_answer and self._is_safe_normalization(
+                    forms, candidate.answer_type
+                ):
+                    candidate.final_answer = forms.latex or candidate.final_answer
+                    form_record["overwrote_answer"] = True
+                run_log.setdefault("answer_forms_by_candidate", {})[candidate.candidate_id] = (
+                    form_record
+                )
             tool_result = self._maybe_run_sandbox(candidate, classification, run_log)
             verification = self._verify_candidate(
                 problem, classification, candidate, tool_result, run_log
             )
 
-            if verification.corrected_answer:
-                candidate.final_answer = verification.corrected_answer
+            corrected = str(verification.corrected_answer or "").strip()
+            if corrected and corrected != str(candidate.final_answer or "").strip():
+                accepted = self._should_accept_correction(
+                    candidate, verification, tool_result
+                )
+                run_log.setdefault("correction_decisions", []).append(
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "accepted": accepted,
+                        "original_answer": candidate.final_answer,
+                        "corrected_answer": corrected,
+                        "confidence": verification.confidence,
+                        "passed": verification.passed,
+                    }
+                )
+                if accepted:
+                    candidate.final_answer = corrected
 
             candidate_record = candidate.model_dump(mode="json")
             candidate_record["tool_result"] = tool_result or {}
@@ -431,13 +459,21 @@ class MathSolverAgent:
             if local_eq.equivalent:
                 verification.confidence = max(verification.confidence, 0.85)
             elif local_eq.method != "none":
-                verification.passed = False
-                verification.error_type = "calculation_error"
-                verification.repair_instruction = (
-                    "The candidate answer differs from executable verification output. "
-                    "Recompute and reconcile the final answer with the tool result."
-                )
-                verification.issues.append("Candidate answer differs from tool output")
+                warning = "Risk warning: candidate answer differs from tool output"
+                verification.issues.append(warning)
+                if warning not in verification.result_check.issues:
+                    verification.result_check.issues.append(warning)
+                if self._can_equivalence_fail_candidate(
+                    candidate, classification, tool_result, local_eq.method
+                ):
+                    verification.passed = False
+                    verification.result_check.passed = False
+                    verification.error_type = "calculation_error"
+                    verification.repair_instruction = (
+                        "The candidate answer differs from reliable executable "
+                        "verification output. Recompute and reconcile the final answer "
+                        "with the tool result."
+                    )
         return verification
 
     def _select_best(
@@ -643,6 +679,86 @@ class MathSolverAgent:
         if domain == "topology":
             return "Work from the definitions and check boundary cases or counterexamples."
         return "Identify the applicable theorem conditions before applying a formula."
+
+    def _should_accept_correction(
+        self,
+        candidate: CandidateSolution,
+        verification: VerificationResult,
+        tool_result: Optional[Dict[str, Any]],
+    ) -> bool:
+        corrected = str(verification.corrected_answer or "").strip()
+        original = str(candidate.final_answer or "").strip()
+        if not corrected or corrected == "unable_to_determine":
+            return False
+        if not verification.passed:
+            return False
+        if verification.confidence < self._config.verifier_correction_min_confidence:
+            return False
+        if not original or original == "unable_to_determine":
+            return False
+
+        answer_type = candidate.answer_type or "other"
+        original_forms = normalize_answer(original, answer_type)
+        corrected_forms = normalize_answer(corrected, answer_type)
+        if (
+            original_forms.canonical
+            and corrected_forms.canonical
+            and original_forms.canonical == corrected_forms.canonical
+        ):
+            return True
+
+        if tool_result and tool_result.get("passed") and tool_result.get("output"):
+            tool_eq = equivalent_answers(corrected, tool_result.get("output", ""), answer_type)
+            if tool_eq.equivalent:
+                return True
+
+        return self._answer_change_is_small(original, corrected)
+
+    @staticmethod
+    def _answer_change_is_small(original: str, corrected: str) -> bool:
+        original = original.strip()
+        corrected = corrected.strip()
+        if not original or not corrected:
+            return False
+        longer = max(len(original), len(corrected))
+        shorter = min(len(original), len(corrected))
+        if longer > 240:
+            return False
+        length_ratio = shorter / longer if longer else 0.0
+        similarity = SequenceMatcher(None, original, corrected).ratio()
+        return length_ratio >= 0.50 and similarity >= 0.60
+
+    @staticmethod
+    def _is_safe_normalization(forms: Any, answer_type: str) -> bool:
+        raw = str(getattr(forms, "raw", "") or "").strip()
+        latex = str(getattr(forms, "latex", "") or "").strip()
+        if not raw or not latex or latex == "unable_to_determine":
+            return False
+        if raw == latex:
+            return True
+        if answer_type == "choice" and len(latex) <= 8:
+            return True
+        if answer_type == "numeric":
+            return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", latex))
+        if len(raw) <= 120 and len(latex) <= 120:
+            return SequenceMatcher(None, raw, latex).ratio() >= 0.80
+        return False
+
+    def _can_equivalence_fail_candidate(
+        self,
+        candidate: CandidateSolution,
+        classification: ClassificationResult,
+        tool_result: Optional[Dict[str, Any]],
+        equivalence_method: str,
+    ) -> bool:
+        if not self._config.equivalence_can_fail_candidate:
+            return False
+        if equivalence_method == "none":
+            return False
+        if not (tool_result and tool_result.get("passed") and tool_result.get("output")):
+            return False
+        answer_type = candidate.answer_type or classification.answer_type or "other"
+        return answer_type in {"numeric", "formula", "matrix", "set", "interval"}
 
     @staticmethod
     def _repair_feedback(verification: VerificationResult, fallback: str) -> str:

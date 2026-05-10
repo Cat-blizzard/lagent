@@ -20,10 +20,13 @@ class SolverConfig:
     enable_sandbox: bool = True
     enable_ortools: bool = True
     enable_normalizer: bool = True
+    normalizer_overwrite_answer: bool = False
     enable_equivalence_check: bool = True
+    equivalence_can_fail_candidate: bool = False
     enable_llm_verify: bool = True
     enable_extract_stage: bool = True
     enable_candidate_selection: bool = True
+    verifier_correction_min_confidence: float = 0.80
     force_max_attempts: Optional[int] = None
 
     def attempts_for(self, difficulty: str) -> int:
@@ -46,11 +49,28 @@ ABLATION_PRESETS: Dict[str, Dict[str, Any]] = {
     "no_ortools": {"enable_ortools": False},
     "no_normalizer": {"enable_normalizer": False, "enable_equivalence_check": False},
     "no_equivalence": {"enable_equivalence_check": False},
+    "strict_equivalence": {"equivalence_can_fail_candidate": True},
     "no_llm_verify": {"enable_llm_verify": False},
     "no_extract": {"enable_extract_stage": False},
     "single_candidate": {
         "force_max_attempts": 1,
         "enable_candidate_selection": False,
+    },
+    "official_stable": {
+        "max_attempts_easy": 1,
+        "max_attempts_medium": 1,
+        "max_attempts_hard": 2,
+        "enable_candidate_selection": False,
+        "normalizer_overwrite_answer": False,
+        "equivalence_can_fail_candidate": False,
+    },
+    "strong": {
+        "max_attempts_easy": 1,
+        "max_attempts_medium": 2,
+        "max_attempts_hard": 3,
+        "enable_candidate_selection": True,
+        "normalizer_overwrite_answer": False,
+        "equivalence_can_fail_candidate": False,
     },
 }
 
