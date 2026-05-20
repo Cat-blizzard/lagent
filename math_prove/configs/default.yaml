@@ -14,4 +14,7 @@ equivalence_can_fail_candidate: false
 enable_llm_verify: true
 enable_extract_stage: true
 enable_candidate_selection: true
+verifier_can_overwrite_answer: false
 verifier_correction_min_confidence: 0.80
+extract_must_match_candidate: true
+official_mode: false

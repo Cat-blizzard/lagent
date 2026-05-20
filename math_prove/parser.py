@@ -55,7 +55,19 @@ DOMAIN_ALIASES = {
     "control": "control_dynamical_systems",
 }
 
-ANSWER_TYPES = {"formula", "numeric", "proof", "choice", "set", "text", "other"}
+ANSWER_TYPES = {
+    "formula",
+    "numeric",
+    "proof",
+    "choice",
+    "set",
+    "interval",
+    "matrix",
+    "vector",
+    "tuple",
+    "text",
+    "other",
+}
 DIFFICULTIES = {"easy", "medium", "hard"}
 ERROR_TYPES = {
     "none",
@@ -104,6 +116,11 @@ def normalize_answer_type(value: Any) -> str:
         "expression": "formula",
         "boolean": "choice",
         "multiple_choice": "choice",
+        "range": "interval",
+        "array": "matrix",
+        "list": "tuple",
+        "ordered_pair": "tuple",
+        "ordered_tuple": "tuple",
     }
     raw = aliases.get(raw, raw)
     return raw if raw in ANSWER_TYPES else "other"

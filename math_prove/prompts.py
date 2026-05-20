@@ -167,7 +167,7 @@ Diagnose the problem and plan the solution. Output ONLY one JSON object:
   "subtype": "short subtype",
   "goal": "what the problem asks for",
   "difficulty": "easy|medium|hard",
-  "answer_type": "formula|numeric|proof|choice|set|text|other",
+  "answer_type": "formula|numeric|proof|choice|set|interval|matrix|vector|tuple|text|other",
   "required_methods": ["method 1", "method 2"],
   "solution_plan": ["step 1", "step 2", "step 3"],
   "possible_pitfalls": ["pitfall 1", "pitfall 2"],
@@ -189,7 +189,7 @@ Solve the problem according to the plan. Output ONLY one JSON object:
   "reasoning_summary": "concise explanation of the core reasoning",
   "key_steps": ["step 1", "step 2", "step 3"],
   "final_answer": "short final answer only",
-  "answer_type": "formula|numeric|proof|choice|set|text|other",
+  "answer_type": "formula|numeric|proof|choice|set|interval|matrix|vector|tuple|text|other",
   "verification_code": "optional short Python code for SymPy/NumPy/SciPy verification, or empty string"
 }
 
@@ -221,7 +221,10 @@ Verify the proposed solution. Output ONLY one JSON object:
 }
 
 Use confidence from 0 to 1. Mark passed=false if assumptions, theorem conditions,
-calculation, special cases, or answer format are doubtful.
+calculation, special cases, or the ability to judge the answer are doubtful.
+Cosmetic formatting issues should go in format_check.issues and issues, but do
+not make passed=false when question_target_check, condition_check, result_check,
+and judgeability_check all pass.
 Allowed error_type values: none, missing_condition, wrong_theorem_condition,
 calculation_error, missing_case_split, answer_not_simplified,
 not_answering_question, boundary_condition_error, domain_error, proof_gap,
@@ -255,7 +258,7 @@ Extract the final judgeable JSON. Output ONLY one JSON object:
   "problem_id": "string",
   "domain": "one of the allowed domain ids",
   "answer": "short final answer only",
-  "answer_type": "formula|numeric|proof|choice|set|text|other",
+  "answer_type": "formula|numeric|proof|choice|set|interval|matrix|vector|tuple|text|other",
   "reasoning_summary": "one concise sentence",
   "key_steps": ["step 1", "step 2", "step 3"],
   "learning_hint": "one concise learning hint",
@@ -267,6 +270,8 @@ Extract the final judgeable JSON. Output ONLY one JSON object:
 }
 
 The answer field must not contain the full reasoning process.
+Do not change the mathematical content of the accepted candidate answer. Only
+compress or reformat it when the result is clearly equivalent.
 The learning_hint must be specific to this problem. Base it on the actual method,
 possible_pitfalls, risk_points, verification.issues, or error_type. Do not use a
 generic hint such as "check theorem conditions" unless it names the concrete

@@ -26,7 +26,10 @@ class SolverConfig:
     enable_llm_verify: bool = True
     enable_extract_stage: bool = True
     enable_candidate_selection: bool = True
+    verifier_can_overwrite_answer: bool = False
     verifier_correction_min_confidence: float = 0.80
+    extract_must_match_candidate: bool = True
+    official_mode: bool = False
     force_max_attempts: Optional[int] = None
 
     def attempts_for(self, difficulty: str) -> int:
@@ -60,7 +63,10 @@ BASE_PRESET: Dict[str, Any] = {
     "enable_llm_verify": False,
     "enable_extract_stage": False,
     "enable_candidate_selection": False,
+    "verifier_can_overwrite_answer": False,
     "force_max_attempts": 1,
+    "extract_must_match_candidate": True,
+    "official_mode": False,
 }
 
 SAFE_PRESET: Dict[str, Any] = {
@@ -137,7 +143,7 @@ ABLATION_PRESETS: Dict[str, Dict[str, Any]] = {
     "safe": SAFE_PRESET,
     "safe_plus": SAFE_PLUS_PRESET,
     "strong": STRONG_PRESET,
-    "official_stable": SAFE_PRESET,
+    "official_stable": {**SAFE_PRESET, "official_mode": True},
     "no_sandbox": {"enable_sandbox": False, "enable_ortools": False},
     "no_ortools": {"enable_ortools": False},
     "no_normalizer": {"enable_normalizer": False, "enable_equivalence_check": False},

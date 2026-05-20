@@ -35,6 +35,37 @@ from .parser import (
 from .sandbox import MathSandbox, Status
 
 
+class OpenAICompatibleGPTAPI(GPTAPI):
+    """GPTAPI variant that accepts arbitrary OpenAI-compatible model names.
+
+    The upstream lagent GPTAPI has a local allowlist for model name prefixes.
+    Intern-S1's official model id is ``intern-s1``, which is valid for the
+    InternLM OpenAI-compatible endpoint but does not pass that allowlist. This
+    subclass keeps the same request format while allowing such model ids.
+    """
+
+    def generate_request_data(self, model_type, messages, gen_params, json_mode=False):
+        gen_params = gen_params.copy()
+        max_tokens = min(gen_params.pop("max_new_tokens"), 4096)
+        if max_tokens <= 0:
+            return "", ""
+
+        header = {"content-type": "application/json"}
+        gen_params["max_tokens"] = max_tokens
+        if "stop_words" in gen_params:
+            gen_params["stop"] = gen_params.pop("stop_words")
+        if "repetition_penalty" in gen_params:
+            gen_params["frequency_penalty"] = gen_params.pop("repetition_penalty")
+        gen_params.pop("top_k", None)
+        gen_params.pop("skip_special_tokens", None)
+        gen_params.pop("session_id", None)
+
+        data = {"model": model_type, "messages": messages, "n": 1, **gen_params}
+        if json_mode:
+            data["response_format"] = {"type": "json_object"}
+        return header, data
+
+
 PROBLEM_TIMEOUT = 180.0
 SANDBOX_TIMEOUT = 10
 MAX_API_RETRIES = 5
@@ -87,18 +118,23 @@ class MathSolverAgent:
         config: Optional[SolverConfig] = None,
         config_path: Optional[str] = None,
         ablation: str = "full",
+        official_mode: bool = False,
     ) -> None:
         self._config = config or load_config(config_path, ablation)
         if config is None and config_path is None:
             self._config.sandbox_timeout = sandbox_timeout
             self._config.problem_timeout = problem_timeout
             self._config.confidence_threshold = confidence_threshold
+        if official_mode:
+            self._config.official_mode = True
 
-        key = api_key or os.environ.get("OPENAI_API_KEY", "ENV")
+        key = api_key or os.environ.get("OPENAI_API_KEY", "")
         base = api_base or os.environ.get(
             "LLM_API_BASE", "https://api.openai.com/v1/chat/completions"
         )
-        self._llm = GPTAPI(
+        if self._config.official_mode:
+            self._validate_official_api_config(model_type, key, base)
+        self._llm = OpenAICompatibleGPTAPI(
             model_type=model_type,
             key=key,
             api_base=base,
@@ -114,6 +150,19 @@ class MathSolverAgent:
         self._problem_timeout = self._config.problem_timeout
         self._confidence_threshold = self._config.confidence_threshold
         self.last_run_log: Dict[str, Any] = {}
+
+    @staticmethod
+    def _validate_official_api_config(model_type: str, api_key: str, api_base: str) -> None:
+        model = str(model_type or "").lower()
+        base = str(api_base or "").lower()
+        if not str(api_key or "").strip():
+            raise RuntimeError("Official run requires OPENAI_API_KEY / Intern-S1 token.")
+        if "intern-s1" not in model:
+            raise RuntimeError("Official run must use intern-s1, intern-s1-pro, or intern-s1-mini.")
+        if "intern" not in base or "/chat/completions" not in base:
+            raise RuntimeError(
+                "Official run must use the InternLM OpenAI-compatible chat completions endpoint."
+            )
 
     def solve(
         self,
@@ -267,13 +316,17 @@ class MathSolverAgent:
 
             corrected = str(verification.corrected_answer or "").strip()
             if corrected and corrected != str(candidate.final_answer or "").strip():
-                accepted = self._should_accept_correction(
-                    candidate, verification, tool_result
+                accepted = bool(
+                    self._config.verifier_can_overwrite_answer
+                    and self._should_accept_correction(
+                        candidate, verification, tool_result
+                    )
                 )
                 run_log.setdefault("correction_decisions", []).append(
                     {
                         "candidate_id": candidate.candidate_id,
                         "accepted": accepted,
+                        "overwrite_enabled": self._config.verifier_can_overwrite_answer,
                         "original_answer": candidate.final_answer,
                         "corrected_answer": corrected,
                         "confidence": verification.confidence,
@@ -490,6 +543,7 @@ class MathSolverAgent:
                     "issues": ["Tool output did not include FINAL_RESULT_FOR_CHECK marker"],
                 }
             )
+        self._soften_format_only_failure(candidate, verification, run_log)
         return verification
 
     def _select_best(
@@ -562,6 +616,8 @@ class MathSolverAgent:
             solution.domain = classification.domain
         if solution.answer_type == "other" and classification.answer_type != "other":
             solution.answer_type = classification.answer_type
+        if self._config.extract_must_match_candidate:
+            self._guard_extracted_answer(solution, candidate, classification, run_log)
         solution.verification.confidence = max(
             solution.verification.confidence, verification.confidence
         )
@@ -573,6 +629,66 @@ class MathSolverAgent:
                     merged.append(issue)
             solution.verification.issues = merged[:5]
         return solution
+
+    @staticmethod
+    def _guard_extracted_answer(
+        solution: MathSolution,
+        candidate: CandidateSolution,
+        classification: ClassificationResult,
+        run_log: Dict[str, Any],
+    ) -> None:
+        candidate_answer = str(candidate.final_answer or "").strip()
+        extracted_answer = str(solution.answer or "").strip()
+        if not candidate_answer or candidate_answer == "unable_to_determine":
+            return
+        answer_type = (
+            solution.answer_type
+            or candidate.answer_type
+            or classification.answer_type
+            or "other"
+        )
+        decision: Dict[str, Any] = {
+            "candidate_id": candidate.candidate_id,
+            "candidate_answer": candidate_answer,
+            "extracted_answer": extracted_answer,
+            "answer_type": answer_type,
+            "accepted_extracted": True,
+        }
+        if not extracted_answer or extracted_answer == "unable_to_determine":
+            decision.update(
+                {
+                    "accepted_extracted": False,
+                    "reason": "extracted_answer_empty_or_fallback",
+                }
+            )
+        elif extracted_answer == candidate_answer:
+            decision["reason"] = "identical"
+        else:
+            eq = equivalent_answers(extracted_answer, candidate_answer, answer_type)
+            decision.update(
+                {
+                    "equivalent": eq.equivalent,
+                    "method": eq.method,
+                    "equivalence_issues": eq.issues,
+                }
+            )
+            if not eq.equivalent:
+                decision.update(
+                    {
+                        "accepted_extracted": False,
+                        "reason": "extract_answer_differs_from_candidate",
+                    }
+                )
+
+        run_log.setdefault("extract_answer_guards", []).append(decision)
+        if decision.get("accepted_extracted"):
+            return
+
+        solution.answer = candidate_answer
+        solution.answer_type = candidate.answer_type or classification.answer_type
+        issue = "Extracted answer differed from accepted candidate; reverted to candidate answer."
+        if issue not in solution.verification.issues:
+            solution.verification.issues.append(issue)
 
     def _maybe_run_sandbox(
         self,
@@ -791,6 +907,44 @@ class MathSolverAgent:
                 return True
 
         return self._answer_change_is_small(original, corrected)
+
+    @staticmethod
+    def _soften_format_only_failure(
+        candidate: CandidateSolution,
+        verification: VerificationResult,
+        run_log: Dict[str, Any],
+    ) -> None:
+        answer = str(candidate.final_answer or "").strip()
+        if not answer or answer == "unable_to_determine":
+            return
+        substantive_checks_passed = all(
+            (
+                verification.question_target_check.passed,
+                verification.condition_check.passed,
+                verification.result_check.passed,
+                verification.judgeability_check.passed,
+            )
+        )
+        format_only = verification.error_type in {"none", "format_error"} and (
+            verification.error_type == "format_error"
+            or not verification.format_check.passed
+        )
+        if not (format_only and substantive_checks_passed):
+            return
+        if not verification.passed:
+            run_log.setdefault("verifier_softenings", []).append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "reason": "format_only_failure",
+                    "answer": answer,
+                    "issues": list(verification.issues),
+                }
+            )
+        verification.passed = True
+        verification.confidence = max(verification.confidence, 0.70)
+        warning = "Format warning was not treated as a mathematical failure."
+        if warning not in verification.issues:
+            verification.issues.append(warning)
 
     @staticmethod
     def _answer_change_is_small(original: str, corrected: str) -> bool:

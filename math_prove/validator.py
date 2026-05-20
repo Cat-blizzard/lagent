@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+import requests
+
 from .normalizer import EquivalenceResult, equivalent_answers, normalize_answer
 from .parser import MathSolution, parse_and_validate
 
@@ -48,6 +50,10 @@ class ValidationItem:
     log_present: Optional[bool] = None
     answer_equivalent: Optional[bool] = None
     equivalence_method: str = ""
+    llm_judge_correct: Optional[bool] = None
+    llm_judge_confidence: Optional[float] = None
+    llm_judge_reason: str = ""
+    llm_judge_method: str = ""
     issues: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -67,6 +73,9 @@ class ValidationReport:
     answer_checked: int = 0
     answer_correct: int = 0
     answer_incorrect: int = 0
+    llm_judge_checked: int = 0
+    llm_judge_correct: int = 0
+    llm_judge_incorrect: int = 0
     items: List[ValidationItem] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -82,12 +91,30 @@ class ValidationReport:
             "answer_checked": self.answer_checked,
             "answer_correct": self.answer_correct,
             "answer_incorrect": self.answer_incorrect,
+            "llm_judge_checked": self.llm_judge_checked,
+            "llm_judge_correct": self.llm_judge_correct,
+            "llm_judge_incorrect": self.llm_judge_incorrect,
             "schema_valid_rate": self.schema_valid / self.total if self.total else 0.0,
             "answer_accuracy": (
                 self.answer_correct / self.answer_checked if self.answer_checked else None
             ),
+            "llm_judge_accuracy": (
+                self.llm_judge_correct / self.llm_judge_checked
+                if self.llm_judge_checked
+                else None
+            ),
             "items": [item.to_dict() for item in self.items],
         }
+
+
+@dataclass
+class LLMJudgeConfig:
+    enabled: bool = False
+    api_key: str = ""
+    api_base: str = "https://api.deepseek.com/chat/completions"
+    model: str = "deepseek-v4-flash"
+    timeout: int = 60
+    judge_all: bool = False
 
 
 def load_result_file(path: str) -> List[Dict[str, Any]]:
@@ -127,6 +154,7 @@ def validate_results(
     expected_path: Optional[str] = None,
     log_dir: Optional[str] = None,
     strict_expected_ids: bool = True,
+    llm_judge: Optional[LLMJudgeConfig] = None,
 ) -> ValidationReport:
     rows = load_result_file(result_path)
     expected = load_expected_file(expected_path) if expected_path else {}
@@ -210,9 +238,147 @@ def validate_results(
                     f"pred={eq.normalized_prediction}; expected={eq.normalized_expected}"
                 )
 
+            if llm_judge and llm_judge.enabled:
+                judge = judge_answer_with_llm(
+                    problem=str(exp.get("problem_text") or exp.get("question") or ""),
+                    prediction=solution.answer,
+                    expected=expected_answer,
+                    answer_type=answer_type,
+                    config=llm_judge,
+                    local_equivalent=eq.equivalent,
+                )
+                item.llm_judge_correct = judge.get("correct")
+                item.llm_judge_confidence = judge.get("confidence")
+                item.llm_judge_reason = judge.get("reason", "")
+                item.llm_judge_method = judge.get("method", "")
+                if item.llm_judge_correct is not None:
+                    report.llm_judge_checked += 1
+                    if item.llm_judge_correct:
+                        report.llm_judge_correct += 1
+                    else:
+                        report.llm_judge_incorrect += 1
+                        item.issues.append("LLM judge marked answer incorrect")
+                        if item.llm_judge_reason:
+                            item.issues.append(f"LLM judge reason: {item.llm_judge_reason}")
+
         report.items.append(item)
 
     return report
+
+
+def judge_answer_with_llm(
+    problem: str,
+    prediction: Any,
+    expected: Any,
+    answer_type: str,
+    config: LLMJudgeConfig,
+    local_equivalent: bool = False,
+) -> Dict[str, Any]:
+    if local_equivalent and not config.judge_all:
+        return {
+            "correct": True,
+            "confidence": 1.0,
+            "reason": "Accepted by local equivalence check.",
+            "method": "local_equivalence_shortcut",
+        }
+
+    if not config.api_key:
+        return {
+            "correct": None,
+            "confidence": 0.0,
+            "reason": "LLM judge API key is missing.",
+            "method": "skipped_missing_api_key",
+        }
+
+    endpoint = _normalize_chat_endpoint(config.api_base)
+    payload = {
+        "model": config.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict but format-tolerant mathematical answer judge. "
+                    "Decide whether the predicted answer is mathematically equivalent "
+                    "to the reference answer for the given problem. Ignore superficial "
+                    "formatting differences such as square brackets vs curly braces, "
+                    "LaTeX vs plain text, whitespace, equivalent fractions/decimals, "
+                    "and ordering of set elements when order is irrelevant. Do not "
+                    "penalize format unless it changes the mathematical meaning. "
+                    "Return only JSON with keys: correct, confidence, reason."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "problem": problem,
+                        "answer_type": answer_type,
+                        "reference_answer": expected,
+                        "predicted_answer": prediction,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0,
+        "max_tokens": 512,
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config.api_key}",
+    }
+    try:
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            data=json.dumps(payload, ensure_ascii=False),
+            timeout=config.timeout,
+        )
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        parsed = _parse_judge_json(content)
+        return {
+            "correct": bool(parsed.get("correct")),
+            "confidence": _clamp_float(parsed.get("confidence", 0.0)),
+            "reason": str(parsed.get("reason", ""))[:500],
+            "method": f"llm_judge:{config.model}",
+        }
+    except Exception as exc:
+        return {
+            "correct": None,
+            "confidence": 0.0,
+            "reason": f"{type(exc).__name__}: {exc}",
+            "method": "llm_judge_error",
+        }
+
+
+def _normalize_chat_endpoint(api_base: str) -> str:
+    base = (api_base or "").rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return base + "/chat/completions"
+
+
+def _parse_judge_json(text: str) -> Dict[str, Any]:
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
+def _clamp_float(value: Any) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = 0.0
+    return max(0.0, min(1.0, number))
 
 
 def _row_problem_id(row: Dict[str, Any], index: int) -> str:

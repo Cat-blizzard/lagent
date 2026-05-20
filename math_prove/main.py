@@ -44,6 +44,7 @@ def run_single_demo(
     api_base: Optional[str] = None,
     config_path: Optional[str] = None,
     ablation: str = "full",
+    official_mode: bool = False,
 ) -> None:
     from .agent import MathSolverAgent
 
@@ -53,6 +54,7 @@ def run_single_demo(
         api_base=api_base,
         config_path=config_path,
         ablation=ablation,
+        official_mode=official_mode,
     )
     item = SAMPLE_PROBLEMS[0]
     start = time.time()
@@ -82,6 +84,7 @@ def run_batch(
     summary_path: Optional[str] = None,
     config_path: Optional[str] = None,
     ablation: str = "full",
+    official_mode: bool = False,
 ) -> Dict[str, Any]:
     from .agent import MathSolverAgent
 
@@ -108,6 +111,7 @@ def run_batch(
         api_base=api_base,
         config_path=config_path,
         ablation=ablation,
+        official_mode=official_mode,
     )
 
     total = len(problems)
@@ -380,6 +384,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--demo", action="store_true", help="Run a single demo problem")
     parser.add_argument("--config", type=str, default=None, help="JSON/YAML runtime config")
     parser.add_argument(
+        "--official",
+        action="store_true",
+        help="Fail fast unless Intern-S1 model, token, and InternLM chat endpoint are configured",
+    )
+    parser.add_argument(
         "--ablation",
         type=str,
         default="full",
@@ -398,7 +407,14 @@ def main() -> None:
     api_key, api_base = _resolve_api_config(args)
 
     if args.demo or not args.input:
-        run_single_demo(args.model, api_key, api_base, args.config, args.ablation)
+        run_single_demo(
+            args.model,
+            api_key,
+            api_base,
+            args.config,
+            args.ablation,
+            args.official,
+        )
         return
 
     run_batch(
@@ -414,6 +430,7 @@ def main() -> None:
         summary_path=args.summary,
         config_path=args.config,
         ablation=args.ablation,
+        official_mode=args.official,
     )
 
 

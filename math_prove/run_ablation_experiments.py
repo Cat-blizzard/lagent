@@ -80,6 +80,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not count expected IDs missing from a limited/subset run as preflight issues.",
     )
+    parser.add_argument("--llm-judge", action="store_true", help="Enable DeepSeek judge")
+    parser.add_argument("--llm-judge-all", action="store_true", help="Judge all answers with LLM")
+    parser.add_argument("--judge-api-key", type=str, default=None)
+    parser.add_argument(
+        "--judge-api-base",
+        type=str,
+        default="https://api.deepseek.com/chat/completions",
+    )
+    parser.add_argument("--judge-model", type=str, default="deepseek-v4-flash")
+    parser.add_argument("--judge-timeout", type=int, default=60)
     parser.add_argument("--dry-run", action="store_true", help="Print the planned command only")
     parser.add_argument("--ablation", type=str, default=None, help="Override suite preset list")
     return parser
@@ -109,6 +119,9 @@ def main() -> None:
         "limit": args.limit,
         "resume": bool(args.resume),
         "ignore_missing_expected": bool(args.ignore_missing_expected),
+        "llm_judge": bool(args.llm_judge),
+        "llm_judge_all": bool(args.llm_judge_all),
+        "judge_model": args.judge_model,
         "dry_run": bool(args.dry_run),
         "started_at": started_at,
         "equivalent_command": equivalent_command,
@@ -140,6 +153,12 @@ def main() -> None:
         resume=args.resume,
         config=None,
         ignore_missing_expected=args.ignore_missing_expected,
+        llm_judge=args.llm_judge,
+        llm_judge_all=args.llm_judge_all,
+        judge_api_key=args.judge_api_key,
+        judge_api_base=args.judge_api_base,
+        judge_model=args.judge_model,
+        judge_timeout=args.judge_timeout,
     )
     run_regression(regression_args)
 
@@ -220,6 +239,16 @@ def build_equivalent_command(
         parts.append("  --resume")
     if args.ignore_missing_expected:
         parts.append("  --ignore-missing-expected")
+    if args.llm_judge:
+        parts.append("  --llm-judge")
+    if args.llm_judge_all:
+        parts.append("  --llm-judge-all")
+    if args.judge_api_key:
+        parts.append("  --judge-api-key <provided>")
+    if args.judge_api_base != "https://api.deepseek.com/chat/completions":
+        parts.append(f"  --judge-api-base {args.judge_api_base}")
+    if args.judge_model != "deepseek-v4-flash":
+        parts.append(f"  --judge-model {args.judge_model}")
     if args.api_key:
         parts.append("  --api-key <provided>")
     if args.api_base:

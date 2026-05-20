@@ -87,6 +87,32 @@ $env:LLM_API_BASE = "https://chat.intern-ai.org.cn/api/v1/chat/completions"
 - Intern-S1 可能输出 `<think>...</think>`，代码会在 JSON 解析前清洗。
 - sandbox 只有输出 `FINAL_RESULT_FOR_CHECK:` 时才参与本地等价检查。
 
+正式比赛风格运行建议开启 fail-fast official mode，避免误用 OpenAI 或其他非 Intern-S1 模型：
+
+```powershell
+uv run python -m math_prove.main `
+  --demo `
+  --model intern-s1 `
+  --ablation official_stable `
+  --official
+```
+
+## 正确率保护机制
+
+当前稳定配置偏保守：辅助阶段可以给出 warning、规范化记录和候选修正建议，但默认不直接改坏已经接受的数学答案。
+
+- `verifier_can_overwrite_answer=false`：verifier 的 `corrected_answer` 默认只写日志，不替换候选答案。
+- `extract_must_match_candidate=true`：extract 阶段只能压缩或等价改写答案；如果抽取答案和候选答案不等价，会自动回退到候选答案。
+- `normalizer_overwrite_answer=false`：normalizer 只记录 raw / latex / canonical 三层形式，不覆盖最终 `answer`。
+- 如果只是表面格式问题，但题意、条件、结果和可判分性都通过，verifier 不再把整体 `passed` 判为 false。
+- 本地等价检查失败默认只是风险提示，`equivalence_can_fail_candidate=false`；只有 strict ablation 才会把它作为硬失败。
+
+支持的 `answer_type`：
+
+```text
+formula, numeric, proof, choice, set, interval, matrix, vector, tuple, text, other
+```
+
 ## 单题 Demo
 
 ```powershell
@@ -223,6 +249,24 @@ Accuracy=85.00% (17/20 checked) | schema_valid=100.00% | preflight_issues=0
 ```
 
 `--ignore-missing-expected` 用于小批量测试，例如只跑 `--limit 20` 时，不把未跑的几千题算成缺失。
+
+### 可选 DeepSeek 裁判
+
+如果想先不管格式，只判断数学结果是否正确，可以开启 DeepSeek 裁判。系统会先跑本地等价检查；默认情况下，只有本地无法证明正确时才调用 DeepSeek，节省 API 费用。
+
+```powershell
+$env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
+
+uv run python -m math_prove.evaluate `
+  --results outputs\mathbench_en_safe\safe\results.jsonl `
+  --expected D:\dataset\converted\mathbench_en.jsonl `
+  --report outputs\mathbench_en_safe\validation_report_deepseek.json `
+  --ignore-missing-expected `
+  --llm-judge `
+  --judge-model deepseek-v4-flash
+```
+
+报告里会同时保留本地等价准确率和 `llm_judge_accuracy`。DeepSeek 裁判会被提示忽略表面格式差异，例如 `[-2, -1, 1, 2]` 和 `{-2, -1, 1, 2}`。
 
 ## 运行并评测
 

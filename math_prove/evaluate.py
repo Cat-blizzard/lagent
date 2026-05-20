@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .main import run_batch
-from .validator import validate_results, write_validation_report
+from .validator import LLMJudgeConfig, validate_results, write_validation_report
 
 
 DEFAULT_EXPECTED = Path(__file__).parent / "validation" / "core_18_sample.jsonl"
@@ -21,12 +21,14 @@ def run_validation_only(
     report: str,
     log_dir: Optional[str] = None,
     strict_expected_ids: bool = True,
+    llm_judge: Optional[LLMJudgeConfig] = None,
 ) -> None:
     validation = validate_results(
         results,
         expected,
         log_dir=log_dir,
         strict_expected_ids=strict_expected_ids,
+        llm_judge=llm_judge,
     )
     write_validation_report(validation, report)
     payload = validation.to_dict()
@@ -43,6 +45,7 @@ def run_regression(args: argparse.Namespace) -> None:
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY")
     api_base = args.api_base or os.environ.get("LLM_API_BASE")
     ablations = [name.strip() for name in args.ablation.split(",") if name.strip()]
+    llm_judge = build_llm_judge_config(args)
     summary = []
 
     for ablation in ablations:
@@ -75,6 +78,7 @@ def run_regression(args: argparse.Namespace) -> None:
             expected,
             log_dir=str(logs),
             strict_expected_ids=not args.ignore_missing_expected,
+            llm_judge=llm_judge,
         )
         write_validation_report(validation, str(validation_report))
         row = validation.to_dict()
@@ -93,12 +97,29 @@ def run_regression(args: argparse.Namespace) -> None:
 def print_score_summary(row: dict, prefix: str = "") -> None:
     accuracy = row.get("answer_accuracy")
     accuracy_text = "n/a" if accuracy is None else f"{accuracy:.2%}"
+    judge_accuracy = row.get("llm_judge_accuracy")
+    judge_text = "" if judge_accuracy is None else f" | llm_judge={judge_accuracy:.2%}"
     schema_rate = row.get("schema_valid_rate", 0.0)
     print(
         f"{prefix}Accuracy={accuracy_text} "
         f"({row.get('answer_correct', 0)}/{row.get('answer_checked', 0)} checked) | "
         f"schema_valid={schema_rate:.2%} | "
         f"preflight_issues={row.get('preflight_issue_count', 0)}"
+        f"{judge_text}"
+    )
+
+
+def build_llm_judge_config(args: argparse.Namespace) -> Optional[LLMJudgeConfig]:
+    if not getattr(args, "llm_judge", False):
+        return None
+    api_key = args.judge_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    return LLMJudgeConfig(
+        enabled=True,
+        api_key=api_key,
+        api_base=args.judge_api_base,
+        model=args.judge_model,
+        timeout=args.judge_timeout,
+        judge_all=args.llm_judge_all,
     )
 
 
@@ -113,6 +134,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not count expected IDs missing from a limited/subset run as preflight issues.",
     )
+    parser.add_argument(
+        "--llm-judge",
+        action="store_true",
+        help="Use a DeepSeek/OpenAI-compatible judge for format-tolerant correctness checks.",
+    )
+    parser.add_argument(
+        "--llm-judge-all",
+        action="store_true",
+        help="Call the LLM judge even when local equivalence already passed.",
+    )
+    parser.add_argument(
+        "--judge-api-key",
+        type=str,
+        default=None,
+        help="Judge API key. Defaults to DEEPSEEK_API_KEY.",
+    )
+    parser.add_argument(
+        "--judge-api-base",
+        type=str,
+        default="https://api.deepseek.com/chat/completions",
+        help="OpenAI-compatible judge chat/completions endpoint or base URL.",
+    )
+    parser.add_argument("--judge-model", type=str, default="deepseek-v4-flash")
+    parser.add_argument("--judge-timeout", type=int, default=60)
     parser.add_argument("--run", action="store_true", help="Run the solver before validating")
     parser.add_argument("--output-dir", type=str, default="outputs/regression")
     parser.add_argument("--model", type=str, default="gpt-4o-mini")
@@ -144,6 +189,7 @@ def main() -> None:
         args.report,
         args.log_dir,
         strict_expected_ids=not args.ignore_missing_expected,
+        llm_judge=build_llm_judge_config(args),
     )
 
 

@@ -97,6 +97,42 @@ Notes:
 - Sandbox output is used for local equivalence checks only when it contains the
   `FINAL_RESULT_FOR_CHECK:` marker.
 
+For formal competition-style runs, use fail-fast official mode so an accidental
+OpenAI/other-model configuration is rejected before the batch starts:
+
+```powershell
+uv run python -m math_prove.main `
+  --demo `
+  --model intern-s1 `
+  --ablation official_stable `
+  --official
+```
+
+## Correctness Guardrails
+
+The default stable path is conservative: helper stages may warn, normalize, or
+log alternatives, but they should not silently damage a mathematically correct
+answer.
+
+- `verifier_can_overwrite_answer=false`: the verifier's `corrected_answer` is
+  logged by default instead of replacing the candidate answer.
+- `extract_must_match_candidate=true`: the extract stage can compress/reformat
+  an answer, but if the extracted answer is not equivalent to the accepted
+  candidate, the system reverts to the candidate answer.
+- `normalizer_overwrite_answer=false`: answer normalization records raw, LaTeX,
+  and canonical forms without overwriting the final `answer`.
+- Cosmetic format-only verifier failures are downgraded when target, condition,
+  result, and judgeability checks all pass.
+- Local equivalence failures are warnings by default
+  (`equivalence_can_fail_candidate=false`) unless a strict ablation enables
+  hard failure.
+
+Supported `answer_type` values are:
+
+```text
+formula, numeric, proof, choice, set, interval, matrix, vector, tuple, text, other
+```
+
 ## Single Demo
 
 ```powershell
@@ -236,6 +272,28 @@ Accuracy=85.00% (17/20 checked) | schema_valid=100.00% | preflight_issues=0
 
 Use `--ignore-missing-expected` for limited runs, such as `--limit 20`, so
 unrun problems in the full expected file are not counted as missing.
+
+### Optional DeepSeek Judge
+
+For a format-tolerant correctness estimate, enable an OpenAI-compatible
+DeepSeek judge. Local equivalence is still used first; by default, DeepSeek is
+called only when local equivalence cannot prove the answer correct.
+
+```powershell
+$env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
+
+uv run python -m math_prove.evaluate `
+  --results outputs\mathbench_en_safe\safe\results.jsonl `
+  --expected D:\dataset\converted\mathbench_en.jsonl `
+  --report outputs\mathbench_en_safe\validation_report_deepseek.json `
+  --ignore-missing-expected `
+  --llm-judge `
+  --judge-model deepseek-v4-flash
+```
+
+The report will include both local equivalence accuracy and
+`llm_judge_accuracy`. The LLM judge is instructed to ignore superficial
+formatting differences such as `[-2, -1, 1, 2]` versus `{-2, -1, 1, 2}`.
 
 ## Run And Evaluate
 
