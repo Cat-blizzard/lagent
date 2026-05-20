@@ -2,6 +2,7 @@
 
 from .parser import (
     CandidateSolution,
+    ClaimCheck,
     ClassificationResult,
     LogEntry,
     MathSolution,
@@ -34,6 +35,7 @@ __all__ = [
     "MathSolution",
     "ClassificationResult",
     "CandidateSolution",
+    "ClaimCheck",
     "VerificationResult",
     "SelectionResult",
     "LogEntry",

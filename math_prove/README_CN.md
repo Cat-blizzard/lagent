@@ -6,6 +6,7 @@
 
 - 单智能体多阶段流水线：预处理、Problem Diagnosis、领域化求解、自检、修正、答案抽取、JSON 输出。
 - 面向 Intern-S1 的 OpenAI-compatible Chat API 调用。
+- 记录可验证中间结构：assumptions、target、derivation_steps、checkable_claims。
 - 输出清洗：剥离 `<think>...</think>`、Markdown JSON 外壳和多余空白。
 - 保守答案控制：verifier、normalizer、sandbox 默认不轻易覆盖最终答案。
 - 本地验证：schema 检查、答案等价检查、低质量答案检查、日志完整性检查。
@@ -113,6 +114,17 @@ uv run python -m math_prove.main `
 ```text
 formula, numeric, proof, choice, set, interval, matrix, vector, tuple, text, other
 ```
+
+## 可验证推理轨迹
+
+系统借鉴 generator-verifier-refiner 的推理闭环思想，但仍然只在一个 `MathSolverAgent` 内部实现，不做多智能体训练。
+
+- `solve_candidate` 相当于 generator，输出候选答案以及 `assumptions`、`target`、`derivation_steps`、`checkable_claims`。
+- `verify_candidate` 相当于 verifier，除了分层检查，还会逐条检查 claim，状态为 `passed`、`failed` 或 `uncertain`。
+- retry feedback 相当于 refiner，会把失败或不确定的 claim 写入下一轮修复提示。
+- `select_best` 只在配置允许、且难题多候选路径触发时使用。
+
+这些字段主要进入每题日志和候选记录；最终提交 JSON 仍保持短答案和可判分格式。
 
 ## 单题 Demo
 

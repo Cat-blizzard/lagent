@@ -300,6 +300,17 @@ class MathSolverAgent:
             candidate = self._solve_candidate(
                 problem, classification, attempt, previous_feedback, run_log
             )
+            run_log.setdefault("reasoning_trace", []).append(
+                {
+                    "attempt": attempt,
+                    "role": "generator",
+                    "candidate_id": candidate.candidate_id,
+                    "method": candidate.method,
+                    "target": candidate.target,
+                    "answer": candidate.final_answer,
+                    "checkable_claims": candidate.checkable_claims,
+                }
+            )
             if self._config.enable_normalizer:
                 forms = normalize_answer(candidate.final_answer, candidate.answer_type)
                 form_record = forms.to_dict()
@@ -315,6 +326,20 @@ class MathSolverAgent:
             tool_result = self._maybe_run_sandbox(candidate, classification, run_log)
             verification = self._verify_candidate(
                 problem, classification, candidate, tool_result, run_log
+            )
+            run_log.setdefault("reasoning_trace", []).append(
+                {
+                    "attempt": attempt,
+                    "role": "verifier",
+                    "candidate_id": candidate.candidate_id,
+                    "passed": verification.passed,
+                    "confidence": verification.confidence,
+                    "error_type": verification.error_type,
+                    "claim_checks": [
+                        item.model_dump(mode="json") for item in verification.claim_checks
+                    ],
+                    "repair_instruction": verification.repair_instruction,
+                }
             )
 
             corrected = str(verification.corrected_answer or "").strip()
@@ -361,6 +386,14 @@ class MathSolverAgent:
                 "Verifier confidence was below threshold; retry with a different method."
             )
             previous_feedback = self._repair_feedback(verification, previous_feedback)
+            run_log.setdefault("reasoning_trace", []).append(
+                {
+                    "attempt": attempt,
+                    "role": "refiner",
+                    "candidate_id": candidate.candidate_id,
+                    "feedback": previous_feedback,
+                }
+            )
 
         if (
             self._config.enable_candidate_selection
@@ -369,6 +402,15 @@ class MathSolverAgent:
         ):
             selected = self._select_best(problem, classification, run_log)
             if selected is not None:
+                run_log.setdefault("reasoning_trace", []).append(
+                    {
+                        "role": "selector",
+                        "selected_candidate_id": selected.selected_candidate_id,
+                        "answer": selected.answer,
+                        "passed": selected.verification.passed,
+                        "confidence": selected.verification.confidence,
+                    }
+                )
                 candidate = CandidateSolution(
                     candidate_id=selected.selected_candidate_id,
                     method="candidate_comparison",
@@ -421,6 +463,8 @@ class MathSolverAgent:
             candidate.final_answer = "unable_to_determine"
         if candidate.answer_type == "other":
             candidate.answer_type = classification.answer_type
+        if not candidate.target:
+            candidate.target = classification.goal or classification.expected_answer_shape
         return candidate
 
     def _verify_candidate(
@@ -1021,6 +1065,14 @@ class MathSolverAgent:
             parts.append(f"repair_instruction={verification.repair_instruction}")
         if verification.issues:
             parts.append("issues=" + "; ".join(verification.issues[:5]))
+        claim_feedback = []
+        for item in verification.claim_checks:
+            if item.status in {"failed", "uncertain"}:
+                claim_feedback.append(
+                    f"{item.status} claim ({item.check_type}): {item.claim}; reason={item.reason}"
+                )
+        if claim_feedback:
+            parts.append("claim_checks=" + " | ".join(claim_feedback[:4]))
         for name in (
             "format_check",
             "question_target_check",

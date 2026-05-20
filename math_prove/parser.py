@@ -83,6 +83,8 @@ ERROR_TYPES = {
     "format_error",
     "unknown",
 }
+CLAIM_STATUSES = {"passed", "failed", "uncertain"}
+CLAIM_CHECK_TYPES = {"symbolic", "numeric", "logical", "definition", "format", "tool", "other"}
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -149,6 +151,56 @@ def normalize_error_type(value: Any) -> str:
     return raw if raw in ERROR_TYPES else "unknown"
 
 
+def normalize_claim_status(value: Any) -> str:
+    raw = str(value or "uncertain").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "pass": "passed",
+        "ok": "passed",
+        "valid": "passed",
+        "fail": "failed",
+        "invalid": "failed",
+        "unknown": "uncertain",
+        "not_checked": "uncertain",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in CLAIM_STATUSES else "uncertain"
+
+
+def normalize_claim_check_type(value: Any) -> str:
+    raw = str(value or "other").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "math": "logical",
+        "logic": "logical",
+        "definition_check": "definition",
+        "executable": "tool",
+        "program": "tool",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in CLAIM_CHECK_TYPES else "other"
+
+
+def _stringify(value: Any, limit: int = 1200) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _trim(value, limit)
+    if isinstance(value, (dict, list, tuple)):
+        try:
+            text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            text = str(value)
+        return _trim(text, limit)
+    return _trim(value, limit)
+
+
+def _list_text(value: Any, limit: int = 300, max_items: int = 6) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [_stringify(item, limit) for item in value if _stringify(item, limit)][:max_items]
+    return [_stringify(value, limit)] if _stringify(value, limit) else []
+
+
 class LayerCheck(BaseModel):
     passed: bool = True
     issues: List[str] = Field(default_factory=list)
@@ -163,6 +215,33 @@ class LayerCheck(BaseModel):
         return [_trim(value, 240)] if str(value).strip() else []
 
 
+class ClaimCheck(BaseModel):
+    claim: str = ""
+    status: str = "uncertain"
+    check_type: str = "other"
+    reason: str = ""
+
+    @field_validator("claim")
+    @classmethod
+    def claim_short(cls, value: Any) -> str:
+        return _stringify(value, 300)
+
+    @field_validator("status")
+    @classmethod
+    def status_allowed(cls, value: Any) -> str:
+        return normalize_claim_status(value)
+
+    @field_validator("check_type")
+    @classmethod
+    def check_type_allowed(cls, value: Any) -> str:
+        return normalize_claim_check_type(value)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_short(cls, value: Any) -> str:
+        return _stringify(value, 300)
+
+
 class VerificationResult(BaseModel):
     passed: bool = False
     confidence: float = 0.0
@@ -172,6 +251,7 @@ class VerificationResult(BaseModel):
     condition_check: LayerCheck = Field(default_factory=LayerCheck)
     result_check: LayerCheck = Field(default_factory=LayerCheck)
     judgeability_check: LayerCheck = Field(default_factory=LayerCheck)
+    claim_checks: List[ClaimCheck] = Field(default_factory=list)
     error_type: str = "none"
     repair_instruction: str = ""
     corrected_answer: str = Field(default="", exclude=True)
@@ -188,11 +268,25 @@ class VerificationResult(BaseModel):
     @field_validator("issues", mode="before")
     @classmethod
     def issues_as_list(cls, value: Any) -> List[str]:
+        return _list_text(value, 300, 8)
+
+    @field_validator("claim_checks", mode="before")
+    @classmethod
+    def claim_checks_list(cls, value: Any) -> List[Any]:
         if value is None:
             return []
         if isinstance(value, list):
-            return [_trim(item, 300) for item in value if str(item).strip()]
-        return [_trim(value, 300)] if str(value).strip() else []
+            return value[:8]
+        if isinstance(value, dict):
+            return [value]
+        return [
+            {
+                "claim": _stringify(value, 300),
+                "status": "uncertain",
+                "check_type": "other",
+                "reason": "",
+            }
+        ] if _stringify(value, 300) else []
 
     @field_validator("error_type")
     @classmethod
@@ -202,12 +296,12 @@ class VerificationResult(BaseModel):
     @field_validator("repair_instruction")
     @classmethod
     def repair_instruction_short(cls, value: str) -> str:
-        return _trim(value, 500)
+        return _stringify(value, 500)
 
     @field_validator("corrected_answer")
     @classmethod
-    def corrected_answer_short(cls, value: str) -> str:
-        return _trim(value, 1200)
+    def corrected_answer_short(cls, value: Any) -> str:
+        return _stringify(value, 1200)
 
 
 class ClassificationResult(BaseModel):
@@ -267,6 +361,10 @@ class CandidateSolution(BaseModel):
     method: str = ""
     reasoning_summary: str = ""
     key_steps: List[str] = Field(default_factory=list)
+    assumptions: List[str] = Field(default_factory=list)
+    target: str = ""
+    derivation_steps: List[str] = Field(default_factory=list)
+    checkable_claims: List[str] = Field(default_factory=list)
     final_answer: str = ""
     answer_type: str = "other"
     verification_code: str = ""
@@ -279,26 +377,27 @@ class CandidateSolution(BaseModel):
     @field_validator("key_steps", mode="before")
     @classmethod
     def key_steps_list(cls, value: Any) -> List[str]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [_trim(item, 260) for item in value if str(item).strip()][:5]
-        return [_trim(value, 260)] if str(value).strip() else []
+        return _list_text(value, 260, 5)
 
-    @field_validator("final_answer")
+    @field_validator("assumptions", "derivation_steps", "checkable_claims", mode="before")
     @classmethod
-    def final_answer_short(cls, value: str) -> str:
-        return _trim(value, 1200)
+    def checkable_lists(cls, value: Any) -> List[str]:
+        return _list_text(value, 300, 6)
 
-    @field_validator("reasoning_summary")
+    @field_validator("final_answer", mode="before")
     @classmethod
-    def reasoning_short(cls, value: str) -> str:
-        return _trim(value, 800)
+    def final_answer_short(cls, value: Any) -> str:
+        return _stringify(value, 1200)
+
+    @field_validator("reasoning_summary", "target")
+    @classmethod
+    def reasoning_short(cls, value: Any) -> str:
+        return _stringify(value, 800)
 
     @field_validator("verification_code")
     @classmethod
-    def code_short(cls, value: str) -> str:
-        return _trim(value, 4000)
+    def code_short(cls, value: Any) -> str:
+        return _stringify(value, 4000)
 
 
 class SelectionResult(BaseModel):
@@ -320,13 +419,13 @@ class SelectionResult(BaseModel):
 
     @field_validator("answer")
     @classmethod
-    def answer_short(cls, value: str) -> str:
-        return _trim(value, 1200)
+    def answer_short(cls, value: Any) -> str:
+        return _stringify(value, 1200)
 
     @field_validator("reasoning_summary", "learning_hint")
     @classmethod
-    def text_short(cls, value: str) -> str:
-        return _trim(value, 800)
+    def text_short(cls, value: Any) -> str:
+        return _stringify(value, 800)
 
 
 class MathSolution(BaseModel):
@@ -359,16 +458,16 @@ class MathSolution(BaseModel):
     def answer_type_allowed(cls, value: Any) -> str:
         return normalize_answer_type(value)
 
-    @field_validator("answer")
+    @field_validator("answer", mode="before")
     @classmethod
     def answer_not_empty(cls, value: Any) -> str:
-        value = _trim(value, 1200)
+        value = _stringify(value, 1200)
         return value or "unable_to_determine"
 
     @field_validator("reasoning_summary", "learning_hint")
     @classmethod
-    def summary_short(cls, value: str) -> str:
-        return _trim(value, 800)
+    def summary_short(cls, value: Any) -> str:
+        return _stringify(value, 800)
 
     @field_validator("key_steps", mode="before")
     @classmethod

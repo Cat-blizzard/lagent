@@ -13,6 +13,8 @@ logs, local validation, accuracy reporting, and benchmark conversion.
 - Runs a single `MathSolverAgent` with a multi-stage internal pipeline.
 - Performs Problem Diagnosis before solving.
 - Uses domain-aware solving and verification prompts.
+- Records verifier-friendly intermediate solution structure:
+  assumptions, target, derivation steps, and checkable claims.
 - Extracts short final answers for automatic judging.
 - Produces strict structured JSON for every problem.
 - Saves per-problem logs and batch summaries.
@@ -135,6 +137,24 @@ Supported `answer_type` values are:
 ```text
 formula, numeric, proof, choice, set, interval, matrix, vector, tuple, text, other
 ```
+
+## Verifiable Reasoning Trace
+
+The solver borrows the generator-verifier-refiner idea from multi-agent
+reasoning work, but implements it inside one `MathSolverAgent`; it does not run
+multi-agent training.
+
+- `solve_candidate` acts as the generator and returns a candidate answer plus
+  `assumptions`, `target`, `derivation_steps`, and `checkable_claims`.
+- `verify_candidate` acts as the verifier and performs layered checks plus
+  per-claim checks with `passed`, `failed`, or `uncertain` status.
+- Retry feedback acts as the refiner: failed or uncertain claims are included in
+  the next attempt's repair instruction.
+- `select_best` is used only when the configured candidate-selection path is
+  enabled for harder questions.
+
+These fields are kept in per-problem logs and candidate records. The final
+submission JSON remains short and judgeable.
 
 ## Single Demo
 

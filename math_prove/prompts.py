@@ -188,12 +188,20 @@ Solve the problem according to the plan. Output ONLY one JSON object:
   "method": "short method name",
   "reasoning_summary": "concise explanation of the core reasoning",
   "key_steps": ["step 1", "step 2", "step 3"],
+  "assumptions": ["condition explicitly used from the problem"],
+  "target": "the exact quantity, statement, or object to compute/prove",
+  "derivation_steps": ["short checkable derivation step 1", "short step 2"],
+  "checkable_claims": ["claim that a verifier or tool can check"],
   "final_answer": "short final answer only",
   "answer_type": "formula|numeric|proof|choice|set|interval|matrix|vector|tuple|text|other",
   "verification_code": "optional short Python code for SymPy/NumPy/SciPy verification, or empty string"
 }
 
 Keep key_steps to at most 5 items. Put no long derivation in final_answer.
+Use assumptions/target/derivation_steps/checkable_claims as a compact,
+verifier-friendly intermediate form. For easy numeric questions these may be
+short; for proof, topology, abstract algebra, or hard questions, fill them with
+the actual logical structure of the solution.
 If the problem is a proof or topology-style task, verification_code may be empty.
 If you write verification_code, keep it short and make the last relevant output a
 single clean line exactly like:
@@ -215,6 +223,14 @@ Verify the proposed solution. Output ONLY one JSON object:
   "condition_check": {"passed": true, "issues": []},
   "result_check": {"passed": true, "issues": []},
   "judgeability_check": {"passed": true, "issues": []},
+  "claim_checks": [
+    {
+      "claim": "one checkable claim from the candidate",
+      "status": "passed|failed|uncertain",
+      "check_type": "symbolic|numeric|logical|definition|format|tool|other",
+      "reason": "short reason"
+    }
+  ],
   "error_type": "none",
   "repair_instruction": "",
   "corrected_answer": "short corrected answer, or same as candidate answer"
@@ -225,6 +241,10 @@ calculation, special cases, or the ability to judge the answer are doubtful.
 Cosmetic formatting issues should go in format_check.issues and issues, but do
 not make passed=false when question_target_check, condition_check, result_check,
 and judgeability_check all pass.
+Check the candidate's assumptions, target, derivation_steps, and
+checkable_claims explicitly. A failed claim should produce a concrete
+repair_instruction; an uncertain claim is a warning unless it blocks judging the
+answer.
 Allowed error_type values: none, missing_condition, wrong_theorem_condition,
 calculation_error, missing_case_split, answer_not_simplified,
 not_answering_question, boundary_condition_error, domain_error, proof_gap,
@@ -378,7 +398,8 @@ def verify_messages(
                 f"Candidate solution:\n{_json(candidate)}\n\n"
                 f"Tool verification result:\n{_json(tool_result or {})}\n\n"
                 "Perform layered checks: format_check, question_target_check, "
-                "condition_check, result_check, and judgeability_check. If any layer "
+                "condition_check, result_check, and judgeability_check. Then inspect "
+                "each checkable_claim and return claim_checks. If any layer or claim "
                 "fails, set a specific error_type and a concrete repair_instruction."
             ),
         },
