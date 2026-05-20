@@ -1,3 +1,24 @@
+# MathSolve-Agent 分支说明
+
+本 fork / branch 在 lagent 基础上新增了一个稳定型单智能体数学解题系统，核心代码位于 [`math_prove/`](math_prove/)。
+
+它使用 `uv` 管理本地开发环境，面向批量数学题评测，包含：
+
+- 基于 Intern-S1 API 的单智能体数学求解流水线；
+- 题目诊断、领域化求解、自检修正、答案抽取和严格 JSON 输出；
+- UGMathBench / TheoremQA / MathBench 转换脚本；
+- schema 校验、答案等价检查、准确率统计和消融实验；
+- 每题独立日志与批量容错机制。
+
+项目专用中文文档见：
+
+- [`math_prove/README_CN.md`](math_prove/README_CN.md)
+- [`math_prove/README.md`](math_prove/README.md)
+
+下面保留 lagent 上游中文说明，便于了解基础框架。
+
+---
+
 # 安装
 
 从源码安装：

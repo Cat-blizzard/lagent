@@ -7,7 +7,8 @@
 > includes batch solving, Intern-S1 API configuration, benchmark conversion
 > scripts, schema validation, answer equivalence checks, accuracy reporting, and
 > ablation experiments. See [`math_prove/README.md`](math_prove/README.md) for
-> the project-specific guide.
+> the project-specific guide. Chinese guides are available at
+> [`README_CN.md`](README_CN.md) and [`math_prove/README_CN.md`](math_prove/README_CN.md).
 
 <div align="center">
   <img src="docs/imgs/lagent_logo.png" width="450"/>
