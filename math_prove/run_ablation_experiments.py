@@ -75,6 +75,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-base", type=str, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--resume", action="store_true", help="Resume within preset directories")
+    parser.add_argument(
+        "--ignore-missing-expected",
+        action="store_true",
+        help="Do not count expected IDs missing from a limited/subset run as preflight issues.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print the planned command only")
     parser.add_argument("--ablation", type=str, default=None, help="Override suite preset list")
     return parser
@@ -103,6 +108,7 @@ def main() -> None:
         "output_dir": str(run_dir),
         "limit": args.limit,
         "resume": bool(args.resume),
+        "ignore_missing_expected": bool(args.ignore_missing_expected),
         "dry_run": bool(args.dry_run),
         "started_at": started_at,
         "equivalent_command": equivalent_command,
@@ -133,6 +139,7 @@ def main() -> None:
         limit=args.limit,
         resume=args.resume,
         config=None,
+        ignore_missing_expected=args.ignore_missing_expected,
     )
     run_regression(regression_args)
 
@@ -211,6 +218,8 @@ def build_equivalent_command(
         parts.append(f"  --limit {args.limit}")
     if args.resume:
         parts.append("  --resume")
+    if args.ignore_missing_expected:
+        parts.append("  --ignore-missing-expected")
     if args.api_key:
         parts.append("  --api-key <provided>")
     if args.api_base:

@@ -1,46 +1,42 @@
 # MathSolve-Agent
 
-基于 `lagent` 的稳定型单智能体数学解题系统。当前代码位于 `math_prove/` 包内，对外展示名使用 **MathSolve-Agent**。
+`math_prove/` 是基于 `lagent` 构建的单智能体数学解题系统。目标不是做 Web Demo，也不是多智能体框架，而是面向批量数学题评测，稳定完成：
 
-系统目标是批量处理多领域数学题，并稳定输出可判分的结构化 JSON。它不是 Web Demo，也不是多智能体框架，而是一个强调正确率、容错性、日志可复现和答案规范化的单智能体流水线。
+- 题目读取与预处理
+- Problem Diagnosis
+- 领域化求解
+- 自检与修正
+- 答案抽取
+- 规范 JSON 输出
+- 每题独立日志
+- 本地 schema / 等价验证 / 准确率统计
+- 消融实验与外部 benchmark 转换
 
-## Core Features
+系统对外仍是一个 `MathSolverAgent`，内部采用多阶段流水线。
 
-- 单智能体多阶段状态控制：预处理、Problem Diagnosis、候选求解、工具辅助验证、分层自检、错误类型驱动修复、答案抽取、JSON 校验。
-- Problem Diagnosis 不只判断题型，还输出 `goal`、`constraints_to_check`、`risk_points`、`needs_case_split`、`needs_tool_verification`、`expected_answer_shape`。
-- 分层 verifier：`format_check`、`question_target_check`、`condition_check`、`result_check`、`judgeability_check`。
-- 领域级 verifier rubric：已重点覆盖复分析、ODE/PDE、优化/运筹、拓扑。
-- 动态候选策略：简单题少调用，困难题可生成多个候选并比较选择。
-- Answer Normalizer：保留原答案、LaTeX 形式和 canonical 形式，默认不覆盖最终答案。
-- 本地 schema + 等价验证器：可检查结果文件是否可解析、字段是否完整、答案是否等价。
-- 提交前体检：检查重复题号、缺题、空答案、Markdown 污染、乱码、低质量答案、日志缺失等工程风险。
-- 批量容错：单题异常不会中断整批任务，支持 `--resume` 断点续跑。
-- 可选数学工具校验：SymPy / NumPy / SciPy / OR-Tools 可用于局部验证，但主推理仍由 LLM 完成。
-
-## Project Layout
+## 目录结构
 
 ```text
 math_prove/
-├── __init__.py
-├── agent.py              # MathSolverAgent 主流程
-├── config.py             # 运行配置与消融 preset
-├── configs/
-│   └── default.yaml
-├── evaluate.py           # 本地验证、回归与消融入口
-├── main.py               # CLI：demo / 批量处理 / resume / 日志
-├── normalizer.py         # 答案规范化与等价判断
-├── parser.py             # Pydantic schema、JSON 解析、fallback
-├── prompts.py            # 诊断、求解、验证、抽取、JSON 修复 prompt
-├── sandbox.py            # 数学计算沙箱
-├── validator.py          # schema、等价验证、提交前体检
+├── agent.py                    # MathSolverAgent 主流程
+├── config.py                   # 运行配置与 ablation preset
+├── convert_benchmarks.py       # UGMathBench / TheoremQA / MathBench 转换脚本
+├── evaluate.py                 # 运行 + 验证 + 准确率统计
+├── main.py                     # demo / 批量求解 / resume / 日志
+├── normalizer.py               # 答案规范化与等价判断
+├── parser.py                   # Pydantic schema、JSON 解析、fallback
+├── prompts.py                  # 诊断、求解、验证、抽取 prompt
+├── run_ablation_experiments.py # 一键消融实验调度器
+├── sandbox.py                  # SymPy / NumPy / SciPy / OR-Tools 辅助验证
+├── validator.py                # schema、等价验证、提交前体检
 ├── validation/
 │   └── core_18_sample.jsonl
 └── README.md
 ```
 
-## Install With uv
+## uv 安装
 
-建议在包含 `setup.py`、`requirements.txt` 和 `math_prove/` 的目录下运行：
+建议在包含 `setup.py` 的 lagent 根目录运行：
 
 ```powershell
 cd D:\lagent-main\lagent
@@ -53,15 +49,10 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uv --version
 ```
 
-创建虚拟环境：
+创建并激活虚拟环境：
 
 ```powershell
 uv venv ..\.venv
-```
-
-激活环境：
-
-```powershell
 ..\.venv\Scripts\Activate.ps1
 ```
 
@@ -69,104 +60,50 @@ uv venv ..\.venv
 
 ```powershell
 uv pip install -r requirements.txt
-uv pip install sympy scipy numpy pandas openpyxl pydantic ortools
 uv pip install -e .
+uv pip install sympy scipy numpy pandas pyarrow openpyxl pydantic ortools
 ```
 
-可选安装 Z3：
+其中 `pandas pyarrow` 主要用于读取 TheoremQA 的 parquet 文件。
 
-```powershell
-uv pip install z3-solver
-```
+## Intern-S1 API 配置
 
-## Configure API
-
-系统使用兼容 OpenAI Chat Completions 的接口。可以通过环境变量配置：
-
-```powershell
-$env:OPENAI_API_KEY = "sk-your-api-key"
-$env:LLM_API_BASE = "https://your-endpoint/v1/chat/completions"
-```
-
-运行时通过 `--model` 指定模型名：
-
-```powershell
---model intern-s1
-```
-
-不要把真实 API Key 写入代码、日志或提交到 GitHub。
-
-## InternLM / Intern-S1 API Strategy
-
-参考官方文档：
-
-- [多轮对话 Chat API](https://internlm.intern-ai.org.cn/doc/docs/Chat/)
-- [用户鉴权](https://internlm.intern-ai.org.cn/doc/docs/%E7%94%A8%E6%88%B7%E9%89%B4%E6%9D%83/)
-- [模型列表](https://internlm.intern-ai.org.cn/doc/docs/%E6%A8%A1%E5%9E%8B%E5%88%97%E8%A1%A8/)
-- [Claude-like API](https://internlm.intern-ai.org.cn/doc/docs/API_DOCUMENTATION_ZH/)
-
-本项目当前基于 `lagent.llms.GPTAPI`，它会直接向 `api_base` 指定的完整 URL 发起 `POST` 请求，所以推荐使用 OpenAI-compatible Chat API：
+当前代码走书生 API 的 OpenAI-compatible Chat Completions 接口，继续使用 `lagent.llms.GPTAPI` 即可。
 
 ```powershell
 $env:OPENAI_API_KEY = "your-internlm-api-token"
 $env:LLM_API_BASE = "https://chat.intern-ai.org.cn/api/v1/chat/completions"
 ```
 
-然后运行：
+运行时指定模型：
 
 ```powershell
-uv run python -m math_prove.main `
-  -i data\problems.jsonl `
-  -o outputs\results.jsonl `
-  --results-json outputs\results.json `
-  --log-dir outputs\logs `
-  --model intern-s1 `
-  --resume
+--model intern-s1
 ```
 
-注意两种写法的区别：
+注意：
 
-| 使用方式 | 地址写法 | 鉴权方式 |
-| --- | --- | --- |
-| 本项目 `GPTAPI` | `https://chat.intern-ai.org.cn/api/v1/chat/completions` | 环境变量里只填 token，代码会自动加 `Authorization: Bearer ...` |
-| OpenAI Python SDK | `base_url="https://chat.intern-ai.org.cn/api/v1/"` | `api_key` 填 token，不手写 `Bearer` |
-| 原生 requests/curl | `https://chat.intern-ai.org.cn/api/v1/chat/completions` | 请求头写 `Authorization: Bearer YOUR_API_TOKEN` |
+- `OPENAI_API_KEY` 只填 token，不手写 `Bearer`。
+- 当前不使用 Claude-like `/v1/messages` 接口。
+- Intern-S1 可能输出 `<think>...</think>` 或 Markdown JSON 外壳，代码会在进入 JSON parser 前清洗。
+- sandbox 输出只有带 `FINAL_RESULT_FOR_CHECK:` 标记时才进入本地等价检查，避免把调试 stdout 当成答案。
 
-官方策略中和本项目最相关的点：
-
-- 默认每用户每分钟限制约 30 次请求；本项目批量跑题时建议保持顺序执行，不要并发压测。
-- `intern-s1-pro`、`intern-s1`、`intern-s1-mini` 支持 `thinking_mode` 控制深度思考模式；当前 `GPTAPI` 路径未额外注入该字段，通常使用模型默认行为即可。
-- Chat API 支持的常用参数包括 `model`、`messages`、`temperature`、`top_p`、`stream`、`max_tokens`、`tools`；本项目主要使用非流式 `messages` 调用。
-- API 侧 120 秒仍未输出完成时可能返回当前已生成结果；因此本项目保留本地 JSON 修复、fallback 和单题异常隔离。
-- API Token 有效期约 6 个月，且只在创建时完整展示；请用环境变量或安全密钥管理，不要写入仓库。
-- 常见错误需要重点处理：鉴权失败、token 过期、模型不存在、messages 格式错误、频率或 token 限制超限。
-- Intern-S1 可能输出 `<think>...</think>` 或 Markdown JSON 外壳；本项目会在进入 JSON parser 前清洗这些外层内容。
-- 工具验证代码如需输出可比较结果，应使用 `FINAL_RESULT_FOR_CHECK:` 标记；没有该标记的 sandbox stdout 只作为 verifier 参考，不参与本地等价判死。
-
-Claude-like `/v1/messages` 也是官方支持的接口，但它使用 `x-api-key` 鉴权、`system` 独立字段和 `content[0].text` 响应结构；这和当前 `GPTAPI` 的 OpenAI-compatible 返回格式不同。除非后续专门新增一个 Claude-like client，否则不建议直接把 `LLM_API_BASE` 改成 `/v1/messages`。
-
-## Run Demo
+## 单题 Demo
 
 ```powershell
-uv run python -m math_prove.main --demo --model intern-s1
+uv run python -m math_prove.main --demo --model intern-s1 --ablation safe
 ```
 
-如果直接使用已创建的虚拟环境：
+## 批量运行
 
-```powershell
-..\.venv\Scripts\python.exe -m math_prove.main --demo --model intern-s1
-```
-
-## Batch Run
-
-输入支持 JSON、JSONL、CSV、XLSX。JSONL 示例：
+输入支持 JSON / JSONL / CSV / XLSX。推荐 JSONL：
 
 ```jsonl
-{"problem_id": "001", "problem_text": "Find all real roots of x^4 - 5x^2 + 4 = 0."}
-{"problem_id": "002", "problem_text": "Given f(z)=(z^2+1)/(z-i), find the residue at z=i."}
+{"problem_id":"001","problem_text":"Find all real roots of x^4 - 5x^2 + 4 = 0."}
+{"problem_id":"002","problem_text":"Compute the residue of f(z)=(z^2+1)/(z-i) at z=i."}
 ```
 
-批量运行：
+批量求解：
 
 ```powershell
 uv run python -m math_prove.main `
@@ -176,6 +113,7 @@ uv run python -m math_prove.main `
   --log-dir outputs\logs `
   --summary outputs\run_summary.json `
   --model intern-s1 `
+  --ablation safe `
   --resume
 ```
 
@@ -183,28 +121,18 @@ uv run python -m math_prove.main `
 
 | 参数 | 说明 |
 | --- | --- |
-| `-i, --input` | 输入文件，支持 JSON / JSONL / CSV / XLSX |
-| `-o, --output` | 增量写入的 JSONL 结果文件 |
-| `--results-json` | 合并后的 JSON 数组结果文件 |
+| `-i, --input` | 输入文件 |
+| `-o, --output` | 增量 JSONL 结果 |
+| `--results-json` | 合并后的 JSON 数组 |
 | `--log-dir` | 每题独立日志目录 |
-| `--summary` | 本次运行摘要 |
+| `--summary` | 运行摘要 |
 | `--limit` | 只跑前 N 题，适合调试 |
-| `--resume` | 跳过 JSONL 中已经存在的题号 |
-| `--config` | 指定运行配置 |
-| `--ablation` | 指定消融 preset |
+| `--resume` | 跳过已经存在于结果 JSONL 的题号 |
+| `--ablation` | 指定配置 preset |
 
-## Conservative Answer Control
+## 输出 Schema
 
-为了避免 verifier、normalizer 或本地等价验证器把原本正确的答案改坏，默认策略偏保守：
-
-- Problem Diagnosis 是强提示，不是硬约束；solver 可以根据题目条件修正诊断和方法。
-- Verifier 的 `corrected_answer` 不会无条件覆盖候选答案。只有在 `verification.passed=true`、`confidence >= 0.80`、答案非空、不是 `unable_to_determine`，并且改动足够小或通过工具输出等价验证时才会覆盖。
-- Normalizer 默认只生成 `answer_forms` 日志，不改写最终 `answer`。如确实要让它覆盖答案，可在配置中设置 `normalizer_overwrite_answer: true`。
-- 本地等价验证器默认只提升通过验证的置信度；失败时只写 risk warning，不直接否决候选。若调试时想让可靠工具验证否决候选，可设置 `equivalence_can_fail_candidate: true` 或使用 `strict_equivalence` preset。
-
-## Output Schema
-
-每道题输出一个严格 JSON 对象：
+每题输出一个严格 JSON 对象：
 
 ```json
 {
@@ -214,7 +142,7 @@ uv run python -m math_prove.main `
   "answer_type": "formula",
   "reasoning_summary": "识别奇点并计算留数，再应用留数定理得到结果。",
   "key_steps": ["确定奇点位置", "计算留数", "应用留数定理"],
-  "learning_hint": "复积分题要先确认围道方向和奇点位置。",
+  "learning_hint": "这类题要先确认围道方向和奇点位置，再套留数定理。",
   "verification": {
     "passed": true,
     "confidence": 0.86,
@@ -232,91 +160,222 @@ uv run python -m math_prove.main `
 
 `answer` 字段只放短答案，不放完整推理过程。
 
-## Validate Results
+## 外部数据集转换
 
-仅做 schema、等价和提交前体检：
+转换脚本统一输出可直接给 `main.py` 和 `evaluate.py` 使用的 JSONL：
+
+```json
+{
+  "problem_id": "...",
+  "problem_text": "...",
+  "domain": "...",
+  "answer_type": "...",
+  "expected_answer": "...",
+  "raw_metadata": {...}
+}
+```
+
+### UGMathBench
+
+原始目录：
+
+```text
+D:\dataset\ugmathbench\data
+```
+
+全量转换：
+
+```powershell
+uv run python -m math_prove.convert_benchmarks ugmathbench `
+  --input D:\dataset\ugmathbench\data `
+  --output D:\dataset\converted\ugmathbench_all.jsonl
+```
+
+小样本：
+
+```powershell
+uv run python -m math_prove.convert_benchmarks ugmathbench `
+  --input D:\dataset\ugmathbench\data `
+  --output D:\dataset\converted\ugmathbench_50.jsonl `
+  --limit 50
+```
+
+### TheoremQA
+
+原始文件：
+
+```text
+D:\dataset\TheoremQA\data\test-00000-of-00001.parquet
+```
+
+默认跳过图片题，只保留文本题：
+
+```powershell
+uv run python -m math_prove.convert_benchmarks theoremqa `
+  --input D:\dataset\TheoremQA\data\test-00000-of-00001.parquet `
+  --output D:\dataset\converted\theoremqa_text_only.jsonl
+```
+
+如需保留图片题：
+
+```powershell
+uv run python -m math_prove.convert_benchmarks theoremqa `
+  --input D:\dataset\TheoremQA\data\test-00000-of-00001.parquet `
+  --output D:\dataset\converted\theoremqa_all.jsonl `
+  --include-images
+```
+
+当前 MathSolve-Agent 是文本单智能体，正式测试建议先用 text-only。
+
+### MathBench
+
+原始目录：
+
+```text
+D:\dataset\MathBench\mathbench_v1
+```
+
+全量转换：
+
+```powershell
+uv run python -m math_prove.convert_benchmarks mathbench `
+  --input D:\dataset\MathBench\mathbench_v1 `
+  --output D:\dataset\converted\mathbench_all.jsonl
+```
+
+只转英文：
+
+```powershell
+uv run python -m math_prove.convert_benchmarks mathbench `
+  --input D:\dataset\MathBench\mathbench_v1 `
+  --output D:\dataset\converted\mathbench_en.jsonl `
+  --language en
+```
+
+## 准确率评测
+
+如果已经有结果文件：
 
 ```powershell
 uv run python -m math_prove.evaluate `
-  --results outputs\results.jsonl `
-  --expected math_prove\validation\core_18_sample.jsonl `
-  --report outputs\validation_report.json `
-  --log-dir outputs\logs
+  --results outputs\mathbench_en_safe\safe\results.jsonl `
+  --expected D:\dataset\converted\mathbench_en.jsonl `
+  --report outputs\mathbench_en_safe\validation_report.json `
+  --ignore-missing-expected
 ```
 
-体检内容包括：
-
-- JSON 是否可解析，schema 是否完整。
-- 是否缺题、重复题号或多出题号。
-- `answer` 是否为空、过长、包含 Markdown 代码块或低质量兜底文本。
-- 是否出现明显乱码。
-- 每题日志是否存在，并能与结果题号对应。
-- 有 expected answer 时，检查基础答案等价性。
-
-## Regression And Ablation
-
-内置一个轻量样例集：
+输出会包含：
 
 ```text
-math_prove/validation/core_18_sample.jsonl
+Accuracy=85.00% (17/20 checked) | schema_valid=100.00% | preflight_issues=0
 ```
 
-运行回归：
+`--ignore-missing-expected` 很重要：当你用 `--limit 20` 跑全量 expected 文件时，它会只按已经生成的 20 道结果算准确率，不把未跑的几千题算作缺失。
+
+## 运行并评测
+
+一条命令跑 MathBench 小批量并计算准确率：
 
 ```powershell
 uv run python -m math_prove.evaluate `
   --run `
-  --expected math_prove\validation\core_18_sample.jsonl `
-  --output-dir outputs\regression `
+  --expected D:\dataset\converted\mathbench_en.jsonl `
+  --output-dir outputs\mathbench_en_safe `
   --model intern-s1 `
-  --ablation full
+  --ablation safe `
+  --limit 20 `
+  --ignore-missing-expected
 ```
 
-运行多组消融：
+TheoremQA：
 
 ```powershell
 uv run python -m math_prove.evaluate `
   --run `
-  --expected math_prove\validation\core_18_sample.jsonl `
-  --output-dir outputs\regression `
+  --expected D:\dataset\converted\theoremqa_text_only.jsonl `
+  --output-dir outputs\theoremqa_safe `
   --model intern-s1 `
-  --ablation full,single_candidate,no_normalizer,no_sandbox
+  --ablation safe `
+  --limit 20 `
+  --ignore-missing-expected
 ```
 
-支持的 preset：
+UGMathBench：
+
+```powershell
+uv run python -m math_prove.evaluate `
+  --run `
+  --expected D:\dataset\converted\ugmathbench_all.jsonl `
+  --output-dir outputs\ugmath_safe `
+  --model intern-s1 `
+  --ablation safe `
+  --limit 20 `
+  --ignore-missing-expected
+```
+
+## 消融实验
+
+一键消融入口：
+
+```powershell
+uv run python -m math_prove.run_ablation_experiments `
+  --suite smoke `
+  --expected D:\dataset\converted\mathbench_en.jsonl `
+  --model intern-s1 `
+  --limit 20 `
+  --ignore-missing-expected `
+  --ablation base,safe,safe_plus
+```
+
+输出目录形如：
 
 ```text
-full
-official_stable
+outputs/ablation_runs/<timestamp>_<suite>/
+├── command_manifest.json
+├── suite_summary.json
+├── ablation_summary.json
+├── base/
+├── safe/
+└── safe_plus/
+```
+
+常用 preset：
+
+```text
+base
+base_verify
+base_normalizer
+base_extract
+base_multi
+safe
+safe_plus
 strong
-no_sandbox
-no_ortools
-no_normalizer
-no_equivalence
-strict_equivalence
-no_llm_verify
-no_extract
-single_candidate
+base_sandbox_observe
+base_sandbox_verify
+base_ortools_verify
 ```
 
-建议正式批量运行优先试：
+建议使用方式：
 
-```powershell
-uv run python -m math_prove.main `
-  -i data\problems.jsonl `
-  -o outputs\results.jsonl `
-  --model intern-s1 `
-  --ablation official_stable `
-  --resume
-```
+- `base`：最小系统，对照组。
+- `safe`：正式提交候选，偏保守。
+- `safe_plus`：低风险增强，用于本地对比。
+- `strong`：难题增强，耗时更高。
 
-需要更强求解但耗时更高时使用：
+## 提交前体检
 
-```powershell
---ablation strong
-```
+验证器会检查：
 
-## Local Checks
+- JSON 是否可解析。
+- schema 是否完整。
+- 是否存在重复题号、缺题、多题。
+- answer 是否为空、过长、含 Markdown 污染。
+- 是否出现明显乱码。
+- 是否存在低质量兜底答案。
+- 每题日志是否存在。
+- 有 expected answer 时，计算本地答案等价率。
+
+## 本地检查
 
 语法检查：
 
@@ -329,35 +388,30 @@ uv run python -m py_compile math_prove\*.py
 ```powershell
 uv run python -m math_prove.main --help
 uv run python -m math_prove.evaluate --help
+uv run python -m math_prove.convert_benchmarks --help
 ```
 
-真实 API 小批量联调：
+## GitHub 注意事项
 
-```powershell
-uv run python -m math_prove.main `
-  -i data\problems.jsonl `
-  -o outputs\results.jsonl `
-  --model intern-s1 `
-  --limit 3
-```
+不要提交：
 
-## GitHub Notes
-
-推送前建议确认：
-
-- 不提交 `.venv/`、`__pycache__/`、`.pytest_cache/`。
-- 不提交 `outputs/`、真实比赛数据、完整运行日志、API Key。
-- 如果以 lagent fork 形式发布，保留原项目 LICENSE，并说明本目录是基于 lagent 的扩展。
-- 推送前至少运行一次 `py_compile` 和 `evaluate --results ...`。
-
-推荐 `.gitignore` 至少包含：
-
-```gitignore
+```text
 .venv/
+outputs/
 __pycache__/
 *.pyc
-.pytest_cache/
-outputs/
-*.log
 .env
+API key
+真实比赛评测集
+大体积外部数据集
 ```
+
+可以提交：
+
+```text
+math_prove/*.py
+math_prove/README.md
+math_prove/validation/core_18_sample.jsonl
+```
+
+如果发布为 lagent fork 的分支，建议根目录 README 只加一个 MathSolve-Agent 入口说明，保留原 lagent README 和 LICENSE。详细使用方式放在本文件里。

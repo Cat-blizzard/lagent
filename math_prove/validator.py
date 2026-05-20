@@ -126,6 +126,7 @@ def validate_results(
     result_path: str,
     expected_path: Optional[str] = None,
     log_dir: Optional[str] = None,
+    strict_expected_ids: bool = True,
 ) -> ValidationReport:
     rows = load_result_file(result_path)
     expected = load_expected_file(expected_path) if expected_path else {}
@@ -138,7 +139,10 @@ def validate_results(
     if expected:
         expected_ids = set(expected.keys())
         result_id_set = set(result_ids)
-        report.missing_expected_ids = sorted(expected_ids - result_id_set)
+        if strict_expected_ids:
+            report.missing_expected_ids = sorted(expected_ids - result_id_set)
+        else:
+            report.missing_expected_ids = []
         report.extra_result_ids = sorted(result_id_set - expected_ids)
         report.preflight_issue_count += len(report.missing_expected_ids) + len(
             report.extra_result_ids

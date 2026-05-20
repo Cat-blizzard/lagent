@@ -1,4 +1,14 @@
 <div id="top"></div>
+
+> **MathSolve-Agent branch note**
+>
+> This fork/branch adds a stable single-agent math solving pipeline under
+> [`math_prove/`](math_prove/). It is managed with `uv` in local development and
+> includes batch solving, Intern-S1 API configuration, benchmark conversion
+> scripts, schema validation, answer equivalence checks, accuracy reporting, and
+> ablation experiments. See [`math_prove/README.md`](math_prove/README.md) for
+> the project-specific guide.
+
 <div align="center">
   <img src="docs/imgs/lagent_logo.png" width="450"/>
 
