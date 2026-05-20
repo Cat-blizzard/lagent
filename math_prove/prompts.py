@@ -106,6 +106,30 @@ DOMAIN_VERIFIER_RUBRICS: Dict[str, str] = {
 }
 
 
+DOMAIN_SOLVE_ADDENDA: Dict[str, str] = {
+    "complex_analysis": (
+        "Complex analysis focus: explicitly check analytic domain, poles and "
+        "singularities, contour orientation, residues, real-axis or principal-value "
+        "issues, and parameter ranges before giving the final answer."
+    ),
+    "partial_differential_equations": (
+        "PDE focus: identify equation type, initial/boundary conditions, domain, "
+        "solution method, and verify by substitution into the PDE plus every "
+        "condition. Mention uniqueness or regularity only when justified."
+    ),
+    "operations_research_optimization": (
+        "Optimization focus: define variables, objective, constraints, feasibility, "
+        "objective value, and a global optimality certificate. For concise LP/IP/CP "
+        "or scheduling checks, verification_code may use OR-Tools."
+    ),
+    "topology": (
+        "Topology focus: reason from definitions, separate general topological "
+        "spaces from metric-space assumptions, prove both directions when needed, "
+        "and construct counterexamples when the statement is false."
+    ),
+}
+
+
 ERROR_TYPE_HINTS = [
     "none",
     "missing_condition",
@@ -171,6 +195,11 @@ Solve the problem according to the plan. Output ONLY one JSON object:
 
 Keep key_steps to at most 5 items. Put no long derivation in final_answer.
 If the problem is a proof or topology-style task, verification_code may be empty.
+If you write verification_code, keep it short and make the last relevant output a
+single clean line exactly like:
+print("FINAL_RESULT_FOR_CHECK:", clean_value)
+The clean_value must be the comparable final value only, without Eq(...), debug
+text, derivation, or wrappers.
 """
 
 
@@ -238,6 +267,10 @@ Extract the final judgeable JSON. Output ONLY one JSON object:
 }
 
 The answer field must not contain the full reasoning process.
+The learning_hint must be specific to this problem. Base it on the actual method,
+possible_pitfalls, risk_points, verification.issues, or error_type. Do not use a
+generic hint such as "check theorem conditions" unless it names the concrete
+condition or pitfall in this problem.
 """
 
 
@@ -266,6 +299,13 @@ def verifier_rubric_for(domain: str) -> str:
         "conditions, theorem assumptions, computations, missing cases, proof gaps, "
         "and whether the final answer is judgeable.",
     )
+
+
+def solve_system_for(domain: str) -> str:
+    addendum = DOMAIN_SOLVE_ADDENDA.get(str(domain or "other"), "")
+    if not addendum:
+        return SOLVE_SYSTEM
+    return SOLVE_SYSTEM + "\nDomain-specific system focus:\n" + addendum
 
 
 def classification_messages(problem: str) -> List[Dict[str, str]]:
@@ -297,7 +337,7 @@ def solve_messages(
 
     feedback = previous_feedback or "No previous feedback."
     return [
-        {"role": "system", "content": SOLVE_SYSTEM},
+        {"role": "system", "content": solve_system_for(domain)},
         {
             "role": "user",
             "content": (

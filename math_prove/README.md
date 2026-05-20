@@ -140,6 +140,8 @@ uv run python -m math_prove.main `
 - API 侧 120 秒仍未输出完成时可能返回当前已生成结果；因此本项目保留本地 JSON 修复、fallback 和单题异常隔离。
 - API Token 有效期约 6 个月，且只在创建时完整展示；请用环境变量或安全密钥管理，不要写入仓库。
 - 常见错误需要重点处理：鉴权失败、token 过期、模型不存在、messages 格式错误、频率或 token 限制超限。
+- Intern-S1 可能输出 `<think>...</think>` 或 Markdown JSON 外壳；本项目会在进入 JSON parser 前清洗这些外层内容。
+- 工具验证代码如需输出可比较结果，应使用 `FINAL_RESULT_FOR_CHECK:` 标记；没有该标记的 sandbox stdout 只作为 verifier 参考，不参与本地等价判死。
 
 Claude-like `/v1/messages` 也是官方支持的接口，但它使用 `x-api-key` 鉴权、`system` 独立字段和 `content[0].text` 响应结构；这和当前 `GPTAPI` 的 OpenAI-compatible 返回格式不同。除非后续专门新增一个 Claude-like client，否则不建议直接把 `LLM_API_BASE` 改成 `/v1/messages`。
 

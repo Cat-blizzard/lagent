@@ -443,16 +443,22 @@ class MathSolverAgent:
             )
         if not verification.corrected_answer:
             verification.corrected_answer = candidate.final_answer
-        if self._config.enable_equivalence_check and tool_result and tool_result.get("passed"):
+        check_output = str((tool_result or {}).get("check_output") or "").strip()
+        if (
+            self._config.enable_equivalence_check
+            and tool_result
+            and tool_result.get("passed")
+            and check_output
+        ):
             local_eq = equivalent_answers(
                 candidate.final_answer,
-                tool_result.get("output", ""),
+                check_output,
                 candidate.answer_type or classification.answer_type,
             )
             run_log.setdefault("local_equivalence_checks", []).append(
                 {
                     "candidate_id": candidate.candidate_id,
-                    "against": "tool_output",
+                    "against": "tool_check_output",
                     **local_eq.to_dict(),
                 }
             )
@@ -474,6 +480,16 @@ class MathSolverAgent:
                         "verification output. Recompute and reconcile the final answer "
                         "with the tool result."
                     )
+        elif self._config.enable_equivalence_check and tool_result and tool_result.get("passed"):
+            run_log.setdefault("local_equivalence_checks", []).append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "against": "tool_check_output",
+                    "equivalent": None,
+                    "method": "skipped_missing_check_marker",
+                    "issues": ["Tool output did not include FINAL_RESULT_FOR_CHECK marker"],
+                }
+            )
         return verification
 
     def _select_best(
@@ -582,18 +598,27 @@ class MathSolverAgent:
         try:
             result = self._sandbox.exec(code)
             passed = result.status == Status.SUCCESS
+            raw_output = _compact(result.value if passed else result.msg, 4000)
+            check_output = self._extract_tool_check_value(raw_output)
             payload = {
                 "passed": passed,
                 "status": str(result.status),
-                "output": _compact(result.value if passed else result.msg, 4000),
+                "output": raw_output,
+                "raw_output": raw_output,
+                "check_output": check_output,
+                "has_check_marker": bool(check_output),
             }
             record.update(payload)
             return payload
         except Exception as exc:
+            raw_output = _compact(f"{type(exc).__name__}: {exc}", 4000)
             payload = {
                 "passed": False,
                 "status": "exception",
-                "output": _compact(f"{type(exc).__name__}: {exc}", 4000),
+                "output": raw_output,
+                "raw_output": raw_output,
+                "check_output": "",
+                "has_check_marker": False,
             }
             record.update(payload)
             return payload
@@ -618,7 +643,12 @@ class MathSolverAgent:
             [AgentMessage(sender=msg["role"], content=msg["content"]) for msg in messages]
         )
         try:
-            response = self._call_llm(messages)
+            raw_response = self._call_llm(messages)
+            response, clean_meta = self._clean_model_output(raw_response)
+            record["raw_response_preview"] = _compact(raw_response, 800)
+            record["cleaned_response_preview"] = _compact(response, 800)
+            record["response_cleaned"] = clean_meta["changed"]
+            record["cleaning_actions"] = clean_meta["actions"]
             record["response"] = response
             self._memory.add(AgentMessage(sender="assistant", content=response))
             return response
@@ -643,12 +673,59 @@ class MathSolverAgent:
                     temperature=self._temperature,
                     max_new_tokens=self._max_new_tokens,
                 )
-                return str(response).strip()
+                return str(response)
             except Exception as exc:
                 last_error = str(exc)
                 if attempt < max_retries - 1:
                     time.sleep(min(2**attempt + 1, 30))
         raise RuntimeError(f"LLM call failed after {max_retries} retries: {last_error}")
+
+    @staticmethod
+    def _clean_model_output(raw: Any) -> Tuple[str, Dict[str, Any]]:
+        text = str(raw or "")
+        original = text
+        actions: List[str] = []
+
+        if text.startswith("\ufeff"):
+            text = text.lstrip("\ufeff")
+            actions.append("strip_bom")
+
+        for tag in ("think", "thinking"):
+            pattern = rf"<{tag}\b[^>]*>.*?(?:</{tag}>|$)"
+            new_text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+            if new_text != text:
+                text = new_text
+                actions.append(f"strip_{tag}_tag")
+
+        stripped = text.strip()
+        fenced = re.fullmatch(
+            r"```(?:json|JSON|text|math)?\s*(.*?)\s*```",
+            stripped,
+            flags=re.DOTALL,
+        )
+        if fenced:
+            stripped = fenced.group(1).strip()
+            actions.append("strip_markdown_fence")
+
+        cleaned = stripped.strip()
+        return cleaned, {
+            "changed": cleaned != original.strip(),
+            "actions": actions,
+        }
+
+    @staticmethod
+    def _extract_tool_check_value(output: Any) -> str:
+        text = str(output or "")
+        matches = re.findall(r"FINAL_RESULT_FOR_CHECK\s*[:=]\s*(.+)", text)
+        if not matches:
+            return ""
+        value = matches[-1].strip()
+        value = value.strip("` ")
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1].strip()
+        return value
 
     def _parse_or_fix(
         self,
@@ -707,8 +784,9 @@ class MathSolverAgent:
         ):
             return True
 
-        if tool_result and tool_result.get("passed") and tool_result.get("output"):
-            tool_eq = equivalent_answers(corrected, tool_result.get("output", ""), answer_type)
+        check_output = str((tool_result or {}).get("check_output") or "").strip()
+        if tool_result and tool_result.get("passed") and check_output:
+            tool_eq = equivalent_answers(corrected, check_output, answer_type)
             if tool_eq.equivalent:
                 return True
 
@@ -755,7 +833,8 @@ class MathSolverAgent:
             return False
         if equivalence_method == "none":
             return False
-        if not (tool_result and tool_result.get("passed") and tool_result.get("output")):
+        check_output = str((tool_result or {}).get("check_output") or "").strip()
+        if not (tool_result and tool_result.get("passed") and check_output):
             return False
         answer_type = candidate.answer_type or classification.answer_type or "other"
         return answer_type in {"numeric", "formula", "matrix", "set", "interval"}
