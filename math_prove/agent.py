@@ -66,7 +66,7 @@ class OpenAICompatibleGPTAPI(GPTAPI):
         return header, data
 
 
-PROBLEM_TIMEOUT = 180.0
+PROBLEM_TIMEOUT = 240.0
 SANDBOX_TIMEOUT = 10
 MAX_API_RETRIES = 5
 CONFIDENCE_THRESHOLD = 0.70
@@ -112,9 +112,9 @@ class MathSolverAgent:
         temperature: float = 0.0,
         max_new_tokens: int = 4096,
         retry: int = 3,
-        sandbox_timeout: int = SANDBOX_TIMEOUT,
-        problem_timeout: float = PROBLEM_TIMEOUT,
-        confidence_threshold: float = CONFIDENCE_THRESHOLD,
+        sandbox_timeout: Optional[int] = None,
+        problem_timeout: Optional[float] = None,
+        confidence_threshold: Optional[float] = None,
         config: Optional[SolverConfig] = None,
         config_path: Optional[str] = None,
         ablation: str = "full",
@@ -122,9 +122,12 @@ class MathSolverAgent:
     ) -> None:
         self._config = config or load_config(config_path, ablation)
         if config is None and config_path is None:
-            self._config.sandbox_timeout = sandbox_timeout
-            self._config.problem_timeout = problem_timeout
-            self._config.confidence_threshold = confidence_threshold
+            if sandbox_timeout is not None:
+                self._config.sandbox_timeout = sandbox_timeout
+            if problem_timeout is not None:
+                self._config.problem_timeout = problem_timeout
+            if confidence_threshold is not None:
+                self._config.confidence_threshold = confidence_threshold
         if official_mode:
             self._config.official_mode = True
 
@@ -574,7 +577,23 @@ class MathSolverAgent:
         run_log: Dict[str, Any],
         start_time: float,
     ) -> MathSolution:
-        self._check_timeout(start_time)
+        try:
+            self._check_timeout(start_time)
+        except TimeoutError as exc:
+            run_log.setdefault("warnings", []).append(
+                f"extract skipped after accepted candidate: {exc}"
+            )
+            payload = {
+                "problem_id": problem_id,
+                "domain": classification.domain,
+                "answer": candidate.final_answer or "unable_to_determine",
+                "answer_type": candidate.answer_type or classification.answer_type,
+                "reasoning_summary": candidate.reasoning_summary,
+                "key_steps": candidate.key_steps,
+                "learning_hint": self._fallback_learning_hint(classification.domain),
+                "verification": verification.model_dump(mode="json"),
+            }
+            return validate_solution_dict(payload, problem_id)
         if not self._config.enable_extract_stage:
             payload = {
                 "problem_id": problem_id,

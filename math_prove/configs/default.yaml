@@ -1,5 +1,5 @@
 confidence_threshold: 0.70
-problem_timeout: 180
+problem_timeout: 240
 sandbox_timeout: 10
 max_api_retries: 5
 max_attempts_easy: 1

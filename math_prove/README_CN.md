@@ -101,6 +101,7 @@ uv run python -m math_prove.main `
 
 当前稳定配置偏保守：辅助阶段可以给出 warning、规范化记录和候选修正建议，但默认不直接改坏已经接受的数学答案。
 
+- 稳定配置默认使用 240 秒单题 timeout。如果候选答案已经产生，但最终 extract 阶段会超时，系统会跳过 extract 并保留已验证候选答案。
 - `verifier_can_overwrite_answer=false`：verifier 的 `corrected_answer` 默认只写日志，不替换候选答案。
 - `extract_must_match_candidate=true`：extract 阶段只能压缩或等价改写答案；如果抽取答案和候选答案不等价，会自动回退到候选答案。
 - `normalizer_overwrite_answer=false`：normalizer 只记录 raw / latex / canonical 三层形式，不覆盖最终 `answer`。

@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 @dataclass
 class SolverConfig:
     confidence_threshold: float = 0.70
-    problem_timeout: float = 180.0
+    problem_timeout: float = 240.0
     sandbox_timeout: int = 10
     max_api_retries: int = 5
     max_attempts_easy: int = 1
@@ -48,7 +48,7 @@ class SolverConfig:
 
 BASE_PRESET: Dict[str, Any] = {
     "confidence_threshold": 0.70,
-    "problem_timeout": 150.0,
+    "problem_timeout": 240.0,
     "sandbox_timeout": 8,
     "max_api_retries": 3,
     "max_attempts_easy": 1,
@@ -79,7 +79,7 @@ SAFE_PRESET: Dict[str, Any] = {
 
 SAFE_PLUS_PRESET: Dict[str, Any] = {
     **SAFE_PRESET,
-    "problem_timeout": 180.0,
+    "problem_timeout": 240.0,
     "max_attempts_medium": 2,
     "enable_equivalence_check": True,
     "enable_extract_stage": True,

@@ -114,6 +114,9 @@ The default stable path is conservative: helper stages may warn, normalize, or
 log alternatives, but they should not silently damage a mathematically correct
 answer.
 
+- Stable presets use a 240-second problem timeout by default. If the accepted
+  candidate has already been produced but the final extract stage would exceed
+  the timeout, extraction is skipped and the verified candidate answer is kept.
 - `verifier_can_overwrite_answer=false`: the verifier's `corrected_answer` is
   logged by default instead of replacing the candidate answer.
 - `extract_must_match_candidate=true`: the extract stage can compress/reformat
