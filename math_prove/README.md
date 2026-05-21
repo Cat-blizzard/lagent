@@ -16,11 +16,15 @@ logs, local validation, accuracy reporting, and benchmark conversion.
 - Records verifier-friendly intermediate solution structure:
   assumptions, target, derivation steps, and checkable claims.
 - Extracts short final answers for automatic judging.
+- Keeps accepted candidate answers protected from unsafe verifier, extract, or
+  normalizer rewrites.
 - Produces strict structured JSON for every problem.
 - Saves per-problem logs and batch summaries.
 - Validates schema, answer equivalence, low-quality answers, and log presence.
 - Converts UGMathBench, TheoremQA, and MathBench into the local JSONL format.
 - Runs ablation experiments and reports accuracy.
+- Can run batches serially or through a sidecar parallel runner with a global
+  RPM limiter.
 
 ## Project Layout
 
@@ -127,11 +131,18 @@ answer.
   candidate, the system reverts to the candidate answer.
 - `normalizer_overwrite_answer=false`: answer normalization records raw, LaTeX,
   and canonical forms without overwriting the final `answer`.
+- The normalizer supports common judge formats such as choices, sets, tuples,
+  vectors, intervals, matrices, fractions, square roots, and elementary
+  functions. These forms are used for comparison and reporting, not for
+  silently changing the final answer in stable presets.
 - Cosmetic format-only verifier failures are downgraded when target, condition,
   result, and judgeability checks all pass.
 - Local equivalence failures are warnings by default
   (`equivalence_can_fail_candidate=false`) unless a strict ablation enables
   hard failure.
+- `official_stable` intentionally inherits the conservative `safe` preset. Use
+  `strong`, `strict_equivalence`, or sandbox presets for local stress tests, not
+  as the first formal-submission configuration.
 
 Supported `answer_type` values are:
 
@@ -220,6 +231,9 @@ uv run python -m math_prove.run_parallel_batch `
 
 If this is stable, try `--workers 5 --rpm-limit 90`. Avoid very high worker
 counts unless the API quota is raised again.
+
+The parallel runner writes the same JSONL / JSON / per-problem log structure as
+the serial path. It only changes scheduling, not the solver pipeline.
 
 ## Output Schema
 
@@ -413,9 +427,13 @@ base_ortools_verify
 Suggested use:
 
 - `base`: minimal baseline.
-- `safe`: conservative candidate for formal batch runs.
+- `safe`: conservative candidate for formal batch runs; helper stages warn but
+  do not directly overwrite accepted answers.
 - `safe_plus`: low-risk enhanced local comparison.
-- `strong`: harder-problem mode with higher latency.
+- `strong`: harder-problem mode with sandbox, OR-Tools, strict equivalence, and
+  verifier correction enabled; use it for hard sets or ablation, not as the
+  default formal run.
+- `official_stable`: fail-fast Intern-S1 configuration based on `safe`.
 
 ## Local Checks
 
@@ -424,6 +442,8 @@ uv run python -m py_compile math_prove\*.py
 uv run python -m math_prove.main --help
 uv run python -m math_prove.evaluate --help
 uv run python -m math_prove.convert_benchmarks --help
+uv run python -m math_prove.run_parallel_batch --help
+uv run --with pytest python -m pytest tests\test_math_prove\test_accuracy_guards.py -q
 ```
 
 ## GitHub Notes

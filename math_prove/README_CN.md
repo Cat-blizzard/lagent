@@ -9,10 +9,12 @@
 - 记录可验证中间结构：assumptions、target、derivation_steps、checkable_claims。
 - 输出清洗：剥离 `<think>...</think>`、Markdown JSON 外壳和多余空白。
 - 保守答案控制：verifier、normalizer、sandbox 默认不轻易覆盖最终答案。
+- 已接受的候选答案会受到保护，extract / verifier / normalizer 在稳定配置下不能随意改写最终答案。
 - 本地验证：schema 检查、答案等价检查、低质量答案检查、日志完整性检查。
 - 准确率统计：可直接对 MathBench、UGMathBench、TheoremQA 转换后的数据计算准确率。
 - 外部数据集转换：支持 UGMathBench、TheoremQA、MathBench。
 - 消融实验：支持 base、safe、safe_plus、strong 等配置对照。
+- 支持串行批量运行，也支持带全局 RPM 限流的旁路并发批量脚本。
 
 ## 目录结构
 
@@ -107,8 +109,10 @@ uv run python -m math_prove.main `
 - `verifier_can_overwrite_answer=false`：verifier 的 `corrected_answer` 默认只写日志，不替换候选答案。
 - `extract_must_match_candidate=true`：extract 阶段只能压缩或等价改写答案；如果抽取答案和候选答案不等价，会自动回退到候选答案。
 - `normalizer_overwrite_answer=false`：normalizer 只记录 raw / latex / canonical 三层形式，不覆盖最终 `answer`。
+- normalizer 已增强常见判分格式：选择题、集合、tuple、vector、interval、matrix、分数、根式和初等函数。稳定配置只把这些规范形式用于比较和报告，不静默改写最终答案。
 - 如果只是表面格式问题，但题意、条件、结果和可判分性都通过，verifier 不再把整体 `passed` 判为 false。
 - 本地等价检查失败默认只是风险提示，`equivalence_can_fail_candidate=false`；只有 strict ablation 才会把它作为硬失败。
+- `official_stable` 继承保守的 `safe` 配置。`strong`、`strict_equivalence`、sandbox 类 preset 更适合本地压力测试或难题重跑，不建议作为第一版正式提交配置。
 
 支持的 `answer_type`：
 
@@ -187,6 +191,8 @@ uv run python -m math_prove.run_parallel_batch `
 ```
 
 如果稳定，再尝试 `--workers 5 --rpm-limit 90`。不建议在没有更高额度前开很大的 worker 数。
+
+并发脚本输出的 JSONL / JSON / 每题日志结构与串行 `main.py` 一致；它只改变调度方式，不改变解题流水线。
 
 ## 输出格式
 
@@ -373,9 +379,10 @@ base_ortools_verify
 建议：
 
 - `base`：最小系统，对照组。
-- `safe`：正式提交候选，偏保守。
+- `safe`：正式提交候选，偏保守；辅助阶段给 warning，但不直接覆盖已接受答案。
 - `safe_plus`：低风险增强，用于本地对比。
-- `strong`：难题增强，耗时更高。
+- `strong`：难题增强，会打开 sandbox、OR-Tools、strict equivalence 和 verifier correction，适合难题集或消融实验，不建议默认用于正式跑全量。
+- `official_stable`：基于 `safe` 的 Intern-S1 fail-fast 正式运行配置。
 
 ## 本地检查
 
@@ -384,6 +391,8 @@ uv run python -m py_compile math_prove\*.py
 uv run python -m math_prove.main --help
 uv run python -m math_prove.evaluate --help
 uv run python -m math_prove.convert_benchmarks --help
+uv run python -m math_prove.run_parallel_batch --help
+uv run --with pytest python -m pytest tests\test_math_prove\test_accuracy_guards.py -q
 ```
 
 ## GitHub 注意事项

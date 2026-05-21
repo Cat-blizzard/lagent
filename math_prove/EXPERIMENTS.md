@@ -16,6 +16,8 @@
 
 原则很简单：先跑最小系统 `base`，再一次只打开一个模块，最后比较 `safe`、`safe_plus`、`strong` 三个组合配置。
 
+当前默认策略偏保守：`safe` 和 `official_stable` 不允许 verifier、normalizer、extract 或本地等价检查静默改写已经接受的候选答案。`strong` 和 strict 类 preset 用于压力测试、难题重跑和消融分析，不建议作为第一版正式全量提交配置。
+
 ## 前置条件
 
 在仓库目录运行：
@@ -143,6 +145,25 @@ outputs/ablation_runs/<timestamp>_<suite>/
 - 正式候选优先看 `safe`。
 - 本地增强对比看 `safe_plus`。
 - 难题和错题重跑看 `strong`。
+- `official_stable` 基于 `safe`，主要用于确认正式运行时不会误用非 Intern-S1 API。
+- 如果 `strong` 比 `safe` 准确率更高，也要人工检查是否来自 strict equivalence / verifier overwrite 的误杀减少或误判增加。
+
+## 并发实验
+
+消融脚本默认走串行调度，便于控制变量。如果只是想加快固定配置的大批量评测，可以使用旁路并发脚本：
+
+```powershell
+uv run python -m math_prove.run_parallel_batch `
+  -i D:\dataset\converted\mathbench_all.jsonl `
+  -o outputs\mathbench_parallel\results.jsonl `
+  --model intern-s1 `
+  --ablation safe `
+  --workers 3 `
+  --rpm-limit 80 `
+  --resume
+```
+
+并发只改变调度，不改变求解流水线。对比准确率时，建议同一组实验固定 `--ablation`、数据集和 `--limit`，只把并发作为加速手段。
 
 ## GitHub 注意
 
@@ -163,4 +184,3 @@ math_prove/EXPERIMENTS.md
 math_prove/run_ablation_experiments.py
 math_prove/config.py
 ```
-

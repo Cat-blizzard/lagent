@@ -8,7 +8,8 @@
 - 题目诊断、领域化求解、自检修正、答案抽取和严格 JSON 输出；
 - UGMathBench / TheoremQA / MathBench 转换脚本；
 - schema 校验、答案等价检查、准确率统计和消融实验；
-- 每题独立日志与批量容错机制。
+- verifier-friendly 推理轨迹、保守 accuracy guards、增强 normalizer；
+- 每题独立日志、批量容错机制和旁路并发批量脚本。
 
 项目专用中文文档见：
 
