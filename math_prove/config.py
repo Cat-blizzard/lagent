@@ -22,11 +22,11 @@ class SolverConfig:
     enable_normalizer: bool = True
     normalizer_overwrite_answer: bool = False
     enable_equivalence_check: bool = True
-    equivalence_can_fail_candidate: bool = False
+    equivalence_can_fail_candidate: bool = True
     enable_llm_verify: bool = True
     enable_extract_stage: bool = True
     enable_candidate_selection: bool = True
-    verifier_can_overwrite_answer: bool = False
+    verifier_can_overwrite_answer: bool = True
     verifier_correction_min_confidence: float = 0.80
     extract_must_match_candidate: bool = True
     official_mode: bool = False
@@ -95,6 +95,8 @@ STRONG_PRESET: Dict[str, Any] = {
     "max_attempts_hard": 3,
     "enable_sandbox": True,
     "enable_ortools": True,
+    "equivalence_can_fail_candidate": True,
+    "verifier_can_overwrite_answer": True,
 }
 
 
@@ -143,7 +145,10 @@ ABLATION_PRESETS: Dict[str, Dict[str, Any]] = {
     "safe": SAFE_PRESET,
     "safe_plus": SAFE_PLUS_PRESET,
     "strong": STRONG_PRESET,
-    "official_stable": {**SAFE_PRESET, "official_mode": True},
+    "official_stable": {
+        **STRONG_PRESET,
+        "official_mode": True,
+    },
     "no_sandbox": {"enable_sandbox": False, "enable_ortools": False},
     "no_ortools": {"enable_ortools": False},
     "no_normalizer": {"enable_normalizer": False, "enable_equivalence_check": False},
