@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from lagent.hooks import MessageLogger
-from lagent.llms import GPTAPI
+from lagent.llms.openai import GPTAPI
 from lagent.memory import Memory
 from lagent.schema import AgentMessage
 
@@ -193,6 +193,10 @@ class MathSolverAgent:
         }
         self.last_run_log = run_log
         self._memory = Memory(recent_n=30)
+        try:
+            self._sandbox.reset()
+        except Exception as exc:
+            run_log.setdefault("warnings", []).append(f"sandbox reset failed: {exc}")
 
         try:
             clean_problem = self._preprocess(problem)
@@ -485,7 +489,7 @@ class MathSolverAgent:
             has_judgeable_answer = bool(
                 candidate.final_answer and candidate.final_answer != "unable_to_determine"
             )
-            return VerificationResult(
+            verification = VerificationResult(
                 passed=has_judgeable_answer,
                 confidence=0.6 if has_judgeable_answer else 0.0,
                 issues=[] if has_judgeable_answer else ["empty or fallback candidate answer"],
@@ -504,43 +508,43 @@ class MathSolverAgent:
                 repair_instruction="" if has_judgeable_answer else "Return a concise non-empty final answer.",
                 corrected_answer=candidate.final_answer,
             )
-
-        try:
-            raw = self._call_stage(f"verify_{candidate.candidate_id}", messages, run_log)
-            verification = self._parse_or_fix(
-                raw, VerificationResult, f"verify_{candidate.candidate_id}", run_log
-            )
-        except Exception as exc:
-            issues = [f"Verifier fallback: {type(exc).__name__}: {exc}"]
-            if tool_result and not tool_result.get("passed", True):
-                issues.append("Tool verification failed")
-            has_judgeable_answer = bool(
-                candidate.final_answer and candidate.final_answer != "unable_to_determine"
-            )
-            verification = VerificationResult(
-                passed=has_judgeable_answer,
-                confidence=0.55 if has_judgeable_answer else 0.0,
-                issues=issues,
-                format_check={
-                    "passed": has_judgeable_answer,
-                    "issues": [] if has_judgeable_answer else ["empty or fallback answer"],
-                },
-                question_target_check={"passed": True, "issues": []},
-                condition_check={"passed": True, "issues": []},
-                result_check={
-                    "passed": not (tool_result and not tool_result.get("passed", True)),
-                    "issues": ["tool verification failed"]
-                    if tool_result and not tool_result.get("passed", True)
-                    else [],
-                },
-                judgeability_check={
-                    "passed": has_judgeable_answer,
-                    "issues": [] if has_judgeable_answer else ["answer is not judgeable"],
-                },
-                error_type="unknown" if issues else "none",
-                repair_instruction="Review verifier fallback issues and produce a corrected concise answer.",
-                corrected_answer=candidate.final_answer,
-            )
+        else:
+            try:
+                raw = self._call_stage(f"verify_{candidate.candidate_id}", messages, run_log)
+                verification = self._parse_or_fix(
+                    raw, VerificationResult, f"verify_{candidate.candidate_id}", run_log
+                )
+            except Exception as exc:
+                issues = [f"Verifier fallback: {type(exc).__name__}: {exc}"]
+                if tool_result and not tool_result.get("passed", True):
+                    issues.append("Tool verification failed")
+                has_judgeable_answer = bool(
+                    candidate.final_answer and candidate.final_answer != "unable_to_determine"
+                )
+                verification = VerificationResult(
+                    passed=has_judgeable_answer,
+                    confidence=0.55 if has_judgeable_answer else 0.0,
+                    issues=issues,
+                    format_check={
+                        "passed": has_judgeable_answer,
+                        "issues": [] if has_judgeable_answer else ["empty or fallback answer"],
+                    },
+                    question_target_check={"passed": True, "issues": []},
+                    condition_check={"passed": True, "issues": []},
+                    result_check={
+                        "passed": not (tool_result and not tool_result.get("passed", True)),
+                        "issues": ["tool verification failed"]
+                        if tool_result and not tool_result.get("passed", True)
+                        else [],
+                    },
+                    judgeability_check={
+                        "passed": has_judgeable_answer,
+                        "issues": [] if has_judgeable_answer else ["answer is not judgeable"],
+                    },
+                    error_type="unknown" if issues else "none",
+                    repair_instruction="Review verifier fallback issues and produce a corrected concise answer.",
+                    corrected_answer=candidate.final_answer,
+                )
         if not verification.corrected_answer:
             verification.corrected_answer = candidate.final_answer
         check_output = str((tool_result or {}).get("check_output") or "").strip()
@@ -564,6 +568,7 @@ class MathSolverAgent:
             )
             if local_eq.equivalent:
                 verification.confidence = max(verification.confidence, 0.85)
+                verification.result_check.passed = True
             elif local_eq.method != "none":
                 warning = "Risk warning: candidate answer differs from tool output"
                 verification.issues.append(warning)
@@ -684,7 +689,9 @@ class MathSolverAgent:
         solution.verification.confidence = max(
             solution.verification.confidence, verification.confidence
         )
-        solution.verification.passed = solution.verification.passed or verification.passed
+        solution.verification.passed = bool(
+            verification.passed and solution.answer != "unable_to_determine"
+        )
         if verification.issues:
             merged = list(solution.verification.issues)
             for issue in verification.issues:
@@ -951,7 +958,7 @@ class MathSolverAgent:
         if verification.confidence < self._config.verifier_correction_min_confidence:
             return False
         if not original or original == "unable_to_determine":
-            return False
+            return True
 
         answer_type = candidate.answer_type or "other"
         original_forms = normalize_answer(original, answer_type)
