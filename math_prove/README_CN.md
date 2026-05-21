@@ -27,6 +27,7 @@ math_prove/
 ├── parser.py                   # Pydantic schema、JSON 解析、fallback
 ├── prompts.py                  # 诊断、求解、验证、抽取 prompt
 ├── run_ablation_experiments.py # 一键消融实验调度器
+├── run_parallel_batch.py       # 旁路并发批量脚本
 ├── sandbox.py                  # SymPy / NumPy / SciPy / OR-Tools 辅助验证
 ├── validator.py                # schema、等价验证、提交前体检
 ├── validation/
@@ -167,6 +168,25 @@ uv run python -m math_prove.main `
 | `--limit` | 只跑前 N 题，适合调试 |
 | `--resume` | 跳过已经存在于结果 JSONL 的题号 |
 | `--ablation` | 指定配置 preset |
+
+## 并发批量脚本
+
+当 Intern-S1 额度允许并发时，可以使用旁路脚本。它不替换串行 `math_prove.main`，而是每个 worker 创建一个 agent，并用全局 RPM limiter 限制所有 LLM 请求。
+
+对于 100 RPM / 1,000,000 TPM 的额度，建议从下面配置开始：
+
+```powershell
+uv run python -m math_prove.run_parallel_batch `
+  -i D:\dataset\converted\mathbench_all.jsonl `
+  -o outputs\mathbench_parallel\results.jsonl `
+  --model intern-s1 `
+  --ablation safe `
+  --workers 3 `
+  --rpm-limit 80 `
+  --resume
+```
+
+如果稳定，再尝试 `--workers 5 --rpm-limit 90`。不建议在没有更高额度前开很大的 worker 数。
 
 ## 输出格式
 

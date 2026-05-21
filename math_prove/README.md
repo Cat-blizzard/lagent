@@ -35,6 +35,7 @@ math_prove/
 ├── parser.py                   # Pydantic schema, JSON parsing, fallback
 ├── prompts.py                  # Diagnosis, solve, verify, extract prompts
 ├── run_ablation_experiments.py # One-command ablation scheduler
+├── run_parallel_batch.py       # Sidecar concurrent batch runner
 ├── sandbox.py                  # SymPy / NumPy / SciPy / OR-Tools helpers
 ├── validator.py                # Schema, equivalence, and preflight checks
 ├── validation/
@@ -197,6 +198,28 @@ Common arguments:
 | `--limit` | Run only the first N problems |
 | `--resume` | Skip IDs already present in the output JSONL |
 | `--ablation` | Runtime preset |
+
+## Parallel Batch Runner
+
+Use the sidecar runner when your Intern-S1 quota allows concurrency. It keeps
+the serial `math_prove.main` path unchanged, creates one agent per worker, and
+uses a global RPM limiter around every LLM request.
+
+Recommended starting point for a 100 RPM / 1,000,000 TPM quota:
+
+```powershell
+uv run python -m math_prove.run_parallel_batch `
+  -i D:\dataset\converted\mathbench_all.jsonl `
+  -o outputs\mathbench_parallel\results.jsonl `
+  --model intern-s1 `
+  --ablation safe `
+  --workers 3 `
+  --rpm-limit 80 `
+  --resume
+```
+
+If this is stable, try `--workers 5 --rpm-limit 90`. Avoid very high worker
+counts unless the API quota is raised again.
 
 ## Output Schema
 
