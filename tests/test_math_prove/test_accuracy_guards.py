@@ -1,3 +1,5 @@
+import time
+
 from math_prove.agent import MathSolverAgent
 from math_prove.config import load_config, SolverConfig
 from math_prove.normalizer import equivalent_answers
@@ -93,6 +95,105 @@ def test_extract_stage_does_not_upgrade_failed_candidate_verification():
 
     assert solution.answer == "4"
     assert solution.verification.passed is False
+
+
+def test_extract_stage_keeps_candidate_answer_and_uses_metadata():
+    agent = object.__new__(MathSolverAgent)
+    agent._config = SolverConfig(enable_extract_stage=True)
+    agent._problem_timeout = 240.0
+
+    def fake_call_stage(stage, messages, run_log):
+        return """
+        {
+          "problem_id": "p2",
+          "domain": "calculus_real_analysis",
+          "answer": "5",
+          "answer_type": "numeric",
+          "reasoning_summary": "Extracted concise summary.",
+          "key_steps": ["Extracted step"],
+          "learning_hint": "Check the arithmetic target before simplifying.",
+          "verification": {"passed": true, "confidence": 1.0, "issues": []}
+        }
+        """
+
+    agent._call_stage = fake_call_stage
+    classification = ClassificationResult(
+        domain="calculus_real_analysis",
+        answer_type="numeric",
+    )
+    candidate = CandidateSolution(
+        candidate_id="A",
+        final_answer="4",
+        answer_type="numeric",
+        reasoning_summary="Candidate summary.",
+        key_steps=["Candidate step"],
+    )
+    verification = VerificationResult(passed=True, confidence=0.92, corrected_answer="4")
+    run_log = {}
+
+    solution = agent._extract_answer(
+        problem_id="p2",
+        problem="Compute 2+2.",
+        classification=classification,
+        candidate=candidate,
+        verification=verification,
+        run_log=run_log,
+        start_time=time.time(),
+    )
+
+    assert solution.answer == "4"
+    assert solution.reasoning_summary == "Extracted concise summary."
+    assert solution.learning_hint == "Check the arithmetic target before simplifying."
+    assert run_log["extract_answer_adapter"][0]["answer_source"] == "candidate"
+
+
+def test_rule_router_sets_tool_policy_for_optimization_and_proof():
+    opt = MathSolverAgent._heuristic_classification(
+        "Maximize 3x + 2y subject to x + y <= 4 and x,y are nonnegative."
+    )
+    assert opt.domain == "operations_research_optimization"
+    assert opt.tool_policy == "ortools"
+    assert opt.needs_tool_verification is True
+
+    proof = MathSolverAgent._heuristic_classification(
+        "Prove that every compact subset of a Hausdorff space is closed."
+    )
+    assert proof.domain == "topology"
+    assert proof.answer_type == "proof"
+    assert proof.tool_policy == "direct"
+    assert proof.needs_tool_verification is False
+
+    combinatorics = MathSolverAgent._heuristic_classification(
+        "How many ways are there to divide a set of 8 elements into 5 non-empty ordered subsets?"
+    )
+    assert combinatorics.domain == "combinatorics"
+    assert combinatorics.answer_type == "numeric"
+    assert combinatorics.tool_policy == "python"
+
+
+def test_rule_prior_fills_missing_tool_policy():
+    classification = ClassificationResult(
+        domain="other",
+        answer_type="other",
+        tool_policy="direct",
+        needs_tool_verification=False,
+    )
+    rule_prior = ClassificationResult(
+        domain="linear_algebra",
+        answer_type="matrix",
+        tool_policy="sympy",
+        needs_tool_verification=True,
+        constraints_to_check=["matrix shape"],
+        risk_points=["row order"],
+    )
+
+    merged = MathSolverAgent._merge_rule_prior(classification, rule_prior)
+
+    assert merged.domain == "linear_algebra"
+    assert merged.answer_type == "matrix"
+    assert merged.tool_policy == "sympy"
+    assert merged.needs_tool_verification is True
+    assert merged.constraints_to_check == ["matrix shape"]
 
 
 def test_official_stable_keeps_accuracy_guards_conservative():

@@ -175,6 +175,7 @@ Diagnose the problem and plan the solution. Output ONLY one JSON object:
   "risk_points": ["likely error point 1", "likely error point 2"],
   "needs_case_split": false,
   "needs_tool_verification": true,
+  "tool_policy": "direct|sympy|ortools|python|hybrid|none",
   "expected_answer_shape": "scalar|set|interval|matrix|proof conclusion|choice|..."
 }
 """
@@ -333,7 +334,18 @@ def solve_system_for(domain: str) -> str:
     return SOLVE_SYSTEM + "\nDomain-specific system focus:\n" + addendum
 
 
-def classification_messages(problem: str) -> List[Dict[str, str]]:
+def classification_messages(
+    problem: str, rule_prior: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, str]]:
+    prior_text = ""
+    if rule_prior:
+        prior_text = (
+            "\n\nRule-first router prior:\n"
+            + _json(rule_prior)
+            + "\nUse this as a strong baseline. Correct it only when the problem "
+            "statement clearly supports a better domain, answer_type, difficulty, "
+            "or tool_policy."
+        )
     return [
         {"role": "system", "content": CLASSIFY_SYSTEM},
         {
@@ -341,7 +353,15 @@ def classification_messages(problem: str) -> List[Dict[str, str]]:
             "content": (
                 "Allowed domain ids:\n"
                 + "\n".join(f"- {domain}" for domain in DOMAINS)
+                + "\n\nAllowed tool_policy values:\n"
+                "- direct: no tool needed; logical or short reasoning\n"
+                "- sympy: symbolic/numeric algebra, calculus, matrices, equations\n"
+                "- ortools: LP/IP/CP/scheduling/operations research optimization\n"
+                "- python: discrete search, graph checks, brute-force enumeration\n"
+                "- hybrid: use reasoning plus possible symbolic/numeric support\n"
+                "- none: tools are not useful or unsafe for this problem\n"
                 + f"\n\nProblem:\n{problem}"
+                + prior_text
             ),
         },
     ]
@@ -371,7 +391,9 @@ def solve_messages(
                 "Treat the diagnosis as a strong but revisable hypothesis. "
                 "If the problem statement supports a better domain, method, or "
                 "answer shape, correct the diagnosis in your reasoning and solve "
-                "according to the actual conditions.\n\n"
+                "according to the actual conditions. Respect tool_policy as a "
+                "tool-use preference, not as a substitute for mathematical "
+                "reasoning.\n\n"
                 f"Domain-specific checks:\n{strategy_for(domain)}\n\n"
                 f"Attempt: {attempt} ({style}).\n"
                 f"Previous verifier feedback and repair instruction:\n{feedback}"

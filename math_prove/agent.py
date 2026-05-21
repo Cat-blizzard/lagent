@@ -275,13 +275,21 @@ class MathSolverAgent:
     def _classify_and_plan(
         self, problem: str, run_log: Dict[str, Any]
     ) -> ClassificationResult:
-        messages = prompts.classification_messages(problem)
+        rule_prior = self._heuristic_classification(problem)
+        run_log["rule_router"] = rule_prior.model_dump(mode="json")
+        messages = prompts.classification_messages(
+            problem,
+            rule_prior=rule_prior.model_dump(mode="json"),
+        )
         try:
             raw = self._call_stage("classify_and_plan", messages, run_log)
-            return self._parse_or_fix(raw, ClassificationResult, "classify_and_plan", run_log)
+            classification = self._parse_or_fix(
+                raw, ClassificationResult, "classify_and_plan", run_log
+            )
+            return self._merge_rule_prior(classification, rule_prior)
         except Exception as exc:
             run_log.setdefault("warnings", []).append(f"classification fallback: {exc}")
-            return self._heuristic_classification(problem)
+            return rule_prior
 
     def _solve_with_retries(
         self,
@@ -626,35 +634,21 @@ class MathSolverAgent:
         run_log: Dict[str, Any],
         start_time: float,
     ) -> MathSolution:
+        solution = self._solution_from_candidate(
+            problem_id=problem_id,
+            classification=classification,
+            candidate=candidate,
+            verification=verification,
+        )
         try:
             self._check_timeout(start_time)
         except TimeoutError as exc:
             run_log.setdefault("warnings", []).append(
                 f"extract skipped after accepted candidate: {exc}"
             )
-            payload = {
-                "problem_id": problem_id,
-                "domain": classification.domain,
-                "answer": candidate.final_answer or "unable_to_determine",
-                "answer_type": candidate.answer_type or classification.answer_type,
-                "reasoning_summary": candidate.reasoning_summary,
-                "key_steps": candidate.key_steps,
-                "learning_hint": self._fallback_learning_hint(classification.domain),
-                "verification": verification.model_dump(mode="json"),
-            }
-            return validate_solution_dict(payload, problem_id)
+            return solution
         if not self._config.enable_extract_stage:
-            payload = {
-                "problem_id": problem_id,
-                "domain": classification.domain,
-                "answer": candidate.final_answer or "unable_to_determine",
-                "answer_type": candidate.answer_type or classification.answer_type,
-                "reasoning_summary": candidate.reasoning_summary,
-                "key_steps": candidate.key_steps,
-                "learning_hint": self._fallback_learning_hint(classification.domain),
-                "verification": verification.model_dump(mode="json"),
-            }
-            return validate_solution_dict(payload, problem_id)
+            return solution
 
         messages = prompts.extract_messages(
             problem_id=problem_id,
@@ -665,40 +659,92 @@ class MathSolverAgent:
         )
         try:
             raw = self._call_stage("extract_answer", messages, run_log)
-            solution = parse_and_validate(raw, problem_id)
+            extracted = parse_and_validate(raw, problem_id)
         except Exception as exc:
             run_log.setdefault("warnings", []).append(f"extract fallback: {exc}")
-            payload = {
-                "problem_id": problem_id,
-                "domain": classification.domain,
-                "answer": candidate.final_answer or "unable_to_determine",
-                "answer_type": candidate.answer_type or classification.answer_type,
-                "reasoning_summary": candidate.reasoning_summary,
-                "key_steps": candidate.key_steps,
-                "learning_hint": self._fallback_learning_hint(classification.domain),
-                "verification": verification.model_dump(mode="json"),
-            }
-            solution = validate_solution_dict(payload, problem_id)
+            return solution
 
-        if solution.domain == "other" and classification.domain != "other":
-            solution.domain = classification.domain
-        if solution.answer_type == "other" and classification.answer_type != "other":
-            solution.answer_type = classification.answer_type
-        if self._config.extract_must_match_candidate:
-            self._guard_extracted_answer(solution, candidate, classification, run_log)
-        solution.verification.confidence = max(
-            solution.verification.confidence, verification.confidence
+        self._merge_extracted_metadata(
+            solution=solution,
+            extracted=extracted,
+            candidate=candidate,
+            classification=classification,
+            run_log=run_log,
         )
+        return solution
+
+    def _solution_from_candidate(
+        self,
+        problem_id: str,
+        classification: ClassificationResult,
+        candidate: CandidateSolution,
+        verification: VerificationResult,
+    ) -> MathSolution:
+        payload = {
+            "problem_id": problem_id,
+            "domain": classification.domain,
+            "answer": candidate.final_answer or "unable_to_determine",
+            "answer_type": candidate.answer_type or classification.answer_type,
+            "reasoning_summary": candidate.reasoning_summary,
+            "key_steps": candidate.key_steps,
+            "learning_hint": self._fallback_learning_hint(classification.domain),
+            "verification": verification.model_dump(mode="json"),
+        }
+        solution = validate_solution_dict(payload, problem_id)
+        solution.verification.confidence = verification.confidence
         solution.verification.passed = bool(
             verification.passed and solution.answer != "unable_to_determine"
         )
-        if verification.issues:
-            merged = list(solution.verification.issues)
-            for issue in verification.issues:
-                if issue not in merged:
-                    merged.append(issue)
-            solution.verification.issues = merged[:5]
         return solution
+
+    @staticmethod
+    def _merge_extracted_metadata(
+        solution: MathSolution,
+        extracted: MathSolution,
+        candidate: CandidateSolution,
+        classification: ClassificationResult,
+        run_log: Dict[str, Any],
+    ) -> None:
+        candidate_answer = str(candidate.final_answer or "").strip()
+        extracted_answer = str(extracted.answer or "").strip()
+        answer_type = (
+            solution.answer_type
+            or candidate.answer_type
+            or classification.answer_type
+            or "other"
+        )
+        decision: Dict[str, Any] = {
+            "candidate_id": candidate.candidate_id,
+            "candidate_answer": candidate_answer,
+            "extracted_answer": extracted_answer,
+            "answer_type": answer_type,
+            "answer_source": "candidate",
+            "metadata_source": "extract_answer",
+        }
+        if extracted_answer and extracted_answer != candidate_answer:
+            eq = equivalent_answers(extracted_answer, candidate_answer, answer_type)
+            decision.update(
+                {
+                    "equivalent": eq.equivalent,
+                    "method": eq.method,
+                    "equivalence_issues": eq.issues,
+                }
+            )
+        else:
+            decision["equivalent"] = bool(extracted_answer == candidate_answer)
+            decision["method"] = "identical" if extracted_answer == candidate_answer else "empty"
+        run_log.setdefault("extract_answer_adapter", []).append(decision)
+
+        if extracted.domain != "other" and solution.domain == "other":
+            solution.domain = extracted.domain
+        if extracted.answer_type != "other" and solution.answer_type == "other":
+            solution.answer_type = extracted.answer_type
+        if extracted.reasoning_summary:
+            solution.reasoning_summary = extracted.reasoning_summary
+        if extracted.key_steps:
+            solution.key_steps = extracted.key_steps[:5]
+        if extracted.learning_hint:
+            solution.learning_hint = extracted.learning_hint
 
     @staticmethod
     def _guard_extracted_answer(
@@ -773,6 +819,11 @@ class MathSolverAgent:
             return {"skipped": True, "reason": "Sandbox disabled by config"}
         if not self._config.enable_ortools and "ortools" in code.lower():
             return {"skipped": True, "reason": "OR-Tools disabled by config"}
+        if classification.tool_policy in {"direct", "none"}:
+            return {
+                "skipped": True,
+                "reason": f"Tool policy is {classification.tool_policy}",
+            }
         if classification.domain not in TOOL_FRIENDLY_DOMAINS:
             return {"skipped": True, "reason": "Domain is not tool-friendly"}
 
@@ -1095,6 +1146,40 @@ class MathSolverAgent:
         return "\n".join(parts) if parts else fallback
 
     @staticmethod
+    def _merge_rule_prior(
+        classification: ClassificationResult,
+        rule_prior: ClassificationResult,
+    ) -> ClassificationResult:
+        """Keep rule-router guardrails when the LLM diagnosis omits them."""
+
+        if classification.domain == "other" and rule_prior.domain != "other":
+            classification.domain = rule_prior.domain
+        if classification.answer_type == "other" and rule_prior.answer_type != "other":
+            classification.answer_type = rule_prior.answer_type
+        llm_prefers_direct = (
+            classification.answer_type == "proof"
+            or classification.domain in {"topology", "functional_analysis"}
+        )
+        if (
+            not llm_prefers_direct
+            and classification.tool_policy in {"direct", "none"}
+            and rule_prior.tool_policy not in {"direct", "none"}
+            and (classification.needs_tool_verification or rule_prior.needs_tool_verification)
+        ):
+            classification.tool_policy = rule_prior.tool_policy
+        if not classification.needs_tool_verification and not llm_prefers_direct:
+            classification.needs_tool_verification = rule_prior.needs_tool_verification
+        if not classification.expected_answer_shape:
+            classification.expected_answer_shape = rule_prior.expected_answer_shape
+        if not classification.constraints_to_check:
+            classification.constraints_to_check = list(rule_prior.constraints_to_check)
+        if not classification.risk_points:
+            classification.risk_points = list(rule_prior.risk_points)
+        if not classification.solution_plan:
+            classification.solution_plan = list(rule_prior.solution_plan)
+        return classification
+
+    @staticmethod
     def _heuristic_classification(problem: str) -> ClassificationResult:
         text = problem.lower()
         checks = [
@@ -1104,6 +1189,7 @@ class MathSolverAgent:
             ("topology", ["topology", "compact", "connected", "homeomorphic", "open cover", "quotient"]),
             ("operations_research_optimization", ["linear programming", "maximize", "minimize", "constraint", "kkt", "optimal"]),
             ("probability_statistics", ["probability", "random variable", "distribution", "expectation", "variance"]),
+            ("combinatorics", ["how many ways", "permutation", "combination", "arrangement", "ordered subset", "non-empty subset", "choose"]),
             ("graph_theory", ["graph", "vertex", "edge", "matching", "coloring", "path"]),
             ("number_theory", ["integer", "prime", "mod", "congruence", "divisible"]),
             ("linear_algebra", ["matrix", "eigen", "vector", "rank", "linear transformation"]),
@@ -1114,17 +1200,52 @@ class MathSolverAgent:
             if any(keyword in text for keyword in keywords):
                 domain = candidate
                 break
-        answer_type = "proof" if any(word in text for word in ["prove", "show that", "证明"]) else "formula"
+        proof_like = any(
+            word in text
+            for word in ["prove", "show that", "证明", "counterexample", "true or false"]
+        )
+        if proof_like:
+            answer_type = "proof"
+        elif re.search(r"\b(a|b|c|d|e)\s*[\).:]", text) and any(
+            marker in text for marker in ["choice", "option", "select", "which"]
+        ):
+            answer_type = "choice"
+        elif any(word in text for word in ["matrix", "pmatrix", "bmatrix"]):
+            answer_type = "matrix"
+        elif any(word in text for word in ["interval", "range of", "domain of"]):
+            answer_type = "interval"
+        elif any(word in text for word in ["all real roots", "all solutions", "find all"]):
+            answer_type = "set"
+        elif any(
+            word in text
+            for word in [
+                "how many",
+                "number of",
+                "compute",
+                "calculate",
+                "value of",
+                "take away",
+                "plus",
+                "minus",
+                "multiplied by",
+                "divided by",
+            ]
+        ):
+            answer_type = "numeric"
+        else:
+            answer_type = "formula"
+        tool_policy = MathSolverAgent._infer_tool_policy(text, domain, answer_type)
         difficulty = "hard" if len(problem) > 1200 else "medium"
         if len(problem) < 240:
             difficulty = "easy"
+        needs_tool = tool_policy in {"sympy", "ortools", "python", "hybrid"}
         return ClassificationResult(
             domain=domain,
             subtype="heuristic",
             goal="solve the stated problem",
             difficulty=difficulty,
             answer_type=answer_type,
-            required_methods=[],
+            required_methods=[tool_policy] if needs_tool else [],
             solution_plan=["Understand the target", "Apply a suitable method", "Check the result"],
             possible_pitfalls=["Classification was produced by fallback heuristics"],
             constraints_to_check=["all stated conditions", "answer format"],
@@ -1132,9 +1253,42 @@ class MathSolverAgent:
             needs_case_split=any(
                 word in text for word in ["case", "parameter", "depending", "分类", "参数"]
             ),
-            needs_tool_verification=domain in TOOL_FRIENDLY_DOMAINS and answer_type != "proof",
+            needs_tool_verification=needs_tool,
+            tool_policy=tool_policy,
             expected_answer_shape=answer_type,
         )
+
+    @staticmethod
+    def _infer_tool_policy(text: str, domain: str, answer_type: str) -> str:
+        if answer_type == "proof" or domain in {"topology", "functional_analysis"}:
+            return "direct"
+        if domain == "operations_research_optimization" or any(
+            word in text
+            for word in [
+                "linear programming",
+                "integer programming",
+                "binary variable",
+                "scheduling",
+                "knapsack",
+                "assignment problem",
+            ]
+        ):
+            return "ortools"
+        if domain in {
+            "linear_algebra",
+            "calculus_real_analysis",
+            "ordinary_differential_equations",
+            "probability_statistics",
+            "numerical_analysis",
+        }:
+            return "sympy"
+        if domain in {"complex_analysis", "partial_differential_equations"}:
+            return "hybrid"
+        if domain in {"graph_theory", "combinatorics", "discrete_mathematics"}:
+            return "python"
+        if answer_type in {"numeric", "formula", "matrix", "vector", "tuple", "set", "interval"}:
+            return "sympy"
+        return "direct"
 
     def _check_timeout(self, start_time: float) -> None:
         if time.time() - start_time > self._problem_timeout:

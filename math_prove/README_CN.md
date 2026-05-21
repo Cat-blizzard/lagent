@@ -6,6 +6,7 @@
 
 - 单智能体多阶段流水线：预处理、Problem Diagnosis、领域化求解、自检、修正、答案抽取、JSON 输出。
 - 面向 Intern-S1 的 OpenAI-compatible Chat API 调用。
+- 规则优先 router 会先给出本地诊断先验，并显式记录 `tool_policy`：`direct`、`sympy`、`ortools`、`python`、`hybrid`、`none`。
 - 记录可验证中间结构：assumptions、target、derivation_steps、checkable_claims。
 - 输出清洗：剥离 `<think>...</think>`、Markdown JSON 外壳和多余空白。
 - 保守答案控制：verifier、normalizer、sandbox 默认不轻易覆盖最终答案。
@@ -105,6 +106,9 @@ uv run python -m math_prove.main `
 
 当前稳定配置偏保守：辅助阶段可以给出 warning、规范化记录和候选修正建议，但默认不直接改坏已经接受的数学答案。
 
+- 规则优先诊断会在 LLM 诊断前先生成本地 routing prior，覆盖明显的算术、矩阵、微积分、优化、图论/离散、拓扑和证明类问题；Intern-S1 负责修正或补充它。
+- `tool_policy` 会写入 `classification`，并控制候选解里的 `verification_code` 是否允许运行。证明/拓扑类诊断默认走直接推理路径，避免被工具误导。
+- 最终 JSON 由代码从已接受的 `CandidateSolution` 组装。extract 阶段可以改进 `reasoning_summary`、`key_steps` 和 `learning_hint`，但稳定配置保留候选答案作为最终 `answer`。
 - 稳定配置默认使用 240 秒单题 timeout。如果候选答案已经产生，但最终 extract 阶段会超时，系统会跳过 extract 并保留已验证候选答案。
 - `verifier_can_overwrite_answer=false`：verifier 的 `corrected_answer` 默认只写日志，不替换候选答案。
 - `extract_must_match_candidate=true`：extract 阶段只能压缩或等价改写答案；如果抽取答案和候选答案不等价，会自动回退到候选答案。

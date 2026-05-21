@@ -13,6 +13,8 @@ logs, local validation, accuracy reporting, and benchmark conversion.
 - Runs a single `MathSolverAgent` with a multi-stage internal pipeline.
 - Performs Problem Diagnosis before solving.
 - Uses domain-aware solving and verification prompts.
+- Adds a rule-first router prior with explicit `tool_policy`
+  (`direct`, `sympy`, `ortools`, `python`, `hybrid`, `none`).
 - Records verifier-friendly intermediate solution structure:
   assumptions, target, derivation steps, and checkable claims.
 - Extracts short final answers for automatic judging.
@@ -121,6 +123,17 @@ The default stable path is conservative: helper stages may warn, normalize, or
 log alternatives, but they should not silently damage a mathematically correct
 answer.
 
+- Rule-first diagnosis now produces a local routing prior before the LLM
+  diagnosis. The prior covers obvious arithmetic, matrix, calculus,
+  optimization, graph/discrete, topology, and proof-like questions, then
+  Intern-S1 can correct or enrich it.
+- `tool_policy` is recorded in `classification` and controls whether generated
+  verification code is allowed to run. Proof/topology-style diagnoses stay on
+  the direct reasoning path unless the model gives a stronger reason.
+- Final JSON is assembled from the accepted `CandidateSolution` by code. The
+  extract stage may improve `reasoning_summary`, `key_steps`, and
+  `learning_hint`, but stable presets keep the final `answer` from the accepted
+  candidate.
 - Stable presets use a 240-second problem timeout by default. If the accepted
   candidate has already been produced but the final extract stage would exceed
   the timeout, extraction is skipped and the verified candidate answer is kept.

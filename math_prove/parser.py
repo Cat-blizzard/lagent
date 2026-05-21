@@ -69,6 +69,7 @@ ANSWER_TYPES = {
     "other",
 }
 DIFFICULTIES = {"easy", "medium", "hard"}
+TOOL_POLICIES = {"direct", "sympy", "ortools", "python", "hybrid", "none"}
 ERROR_TYPES = {
     "none",
     "missing_condition",
@@ -133,6 +134,26 @@ def normalize_difficulty(value: Any) -> str:
     aliases = {"simple": "easy", "normal": "medium", "difficult": "hard"}
     raw = aliases.get(raw, raw)
     return raw if raw in DIFFICULTIES else "medium"
+
+
+def normalize_tool_policy(value: Any) -> str:
+    raw = str(value or "direct").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "no_tool": "none",
+        "none_needed": "none",
+        "manual": "direct",
+        "logic": "direct",
+        "symbolic": "sympy",
+        "numeric": "sympy",
+        "numpy": "python",
+        "scipy": "python",
+        "or_tools": "ortools",
+        "operations_research": "ortools",
+        "mixed": "hybrid",
+        "tool": "hybrid",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in TOOL_POLICIES else "direct"
 
 
 def normalize_error_type(value: Any) -> str:
@@ -317,6 +338,7 @@ class ClassificationResult(BaseModel):
     risk_points: List[str] = Field(default_factory=list)
     needs_case_split: bool = False
     needs_tool_verification: bool = False
+    tool_policy: str = "direct"
     expected_answer_shape: str = ""
 
     @field_validator("domain")
@@ -333,6 +355,11 @@ class ClassificationResult(BaseModel):
     @classmethod
     def answer_type_allowed(cls, value: Any) -> str:
         return normalize_answer_type(value)
+
+    @field_validator("tool_policy")
+    @classmethod
+    def tool_policy_allowed(cls, value: Any) -> str:
+        return normalize_tool_policy(value)
 
     @field_validator(
         "required_methods",
