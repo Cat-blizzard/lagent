@@ -95,11 +95,12 @@ def test_extract_stage_does_not_upgrade_failed_candidate_verification():
     assert solution.verification.passed is False
 
 
-def test_official_stable_keeps_accuracy_guards_enabled():
+def test_official_stable_keeps_accuracy_guards_conservative():
     config = load_config(ablation="official_stable")
 
     assert config.official_mode is True
-    assert config.enable_sandbox is True
-    assert config.enable_equivalence_check is True
-    assert config.equivalence_can_fail_candidate is True
-    assert config.verifier_can_overwrite_answer is True
+    assert config.enable_sandbox is False
+    assert config.enable_equivalence_check is False
+    assert config.equivalence_can_fail_candidate is False
+    assert config.verifier_can_overwrite_answer is False
+    assert config.enable_llm_verify is True

@@ -22,11 +22,11 @@ class SolverConfig:
     enable_normalizer: bool = True
     normalizer_overwrite_answer: bool = False
     enable_equivalence_check: bool = True
-    equivalence_can_fail_candidate: bool = True
+    equivalence_can_fail_candidate: bool = False
     enable_llm_verify: bool = True
     enable_extract_stage: bool = True
     enable_candidate_selection: bool = True
-    verifier_can_overwrite_answer: bool = True
+    verifier_can_overwrite_answer: bool = False
     verifier_correction_min_confidence: float = 0.80
     extract_must_match_candidate: bool = True
     official_mode: bool = False
@@ -146,7 +146,7 @@ ABLATION_PRESETS: Dict[str, Dict[str, Any]] = {
     "safe_plus": SAFE_PLUS_PRESET,
     "strong": STRONG_PRESET,
     "official_stable": {
-        **STRONG_PRESET,
+        **SAFE_PRESET,
         "official_mode": True,
     },
     "no_sandbox": {"enable_sandbox": False, "enable_ortools": False},
