@@ -112,15 +112,33 @@ def print_score_summary(row: dict, prefix: str = "") -> None:
 def build_llm_judge_config(args: argparse.Namespace) -> Optional[LLMJudgeConfig]:
     if not getattr(args, "llm_judge", False):
         return None
-    api_key = args.judge_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
-    return LLMJudgeConfig(
+    config = LLMJudgeConfig(
         enabled=True,
-        api_key=api_key,
-        api_base=args.judge_api_base,
-        model=args.judge_model,
         timeout=args.judge_timeout,
         judge_all=args.llm_judge_all,
     )
+    # Primary judge
+    key1 = args.judge_api_key or os.environ.get("DEEPSEEK_API_KEY", "") or os.environ.get("MODEL_API_KEY", "")
+    base1 = args.judge_api_base or os.environ.get("LLM_API_BASE", "https://api.deepseek.com/chat/completions")
+    if key1:
+        config.add_judge(args.judge_model, key1, base1)
+    # Second judge
+    model2 = getattr(args, "judge_model2", None)
+    if model2:
+        key2 = getattr(args, "judge_api_key2", None) or os.environ.get("MODEL2_API_KEY", "")
+        base2 = getattr(args, "judge_api_base2", None) or os.environ.get("LLM_API_BASE", "https://api.openai.com/v1/chat/completions")
+        if key2:
+            config.add_judge(model2, key2, base2)
+    # Third judge
+    model3 = getattr(args, "judge_model3", None)
+    if model3:
+        key3 = getattr(args, "judge_api_key3", None) or os.environ.get("MODEL3_API_KEY", "")
+        base3 = getattr(args, "judge_api_base3", None) or os.environ.get("LLM_API_BASE", "https://api.openai.com/v1/chat/completions")
+        if key3:
+            config.add_judge(model3, key3, base3)
+    if not config.judges:
+        return None
+    return config
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -148,16 +166,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--judge-api-key",
         type=str,
         default=None,
-        help="Judge API key. Defaults to DEEPSEEK_API_KEY.",
+        help="Judge 1 API key. Defaults to DEEPSEEK_API_KEY or MODEL_API_KEY.",
     )
     parser.add_argument(
         "--judge-api-base",
         type=str,
-        default="https://api.deepseek.com/chat/completions",
-        help="OpenAI-compatible judge chat/completions endpoint or base URL.",
+        default=None,
+        help="Judge 1 API base URL.",
     )
-    parser.add_argument("--judge-model", type=str, default="deepseek-v4-flash")
+    parser.add_argument("--judge-model", type=str, default="deepseek-chat", help="Judge 1 model name")
     parser.add_argument("--judge-timeout", type=int, default=60)
+    parser.add_argument("--judge-model2", type=str, default=None, help="Judge 2 model name (optional)")
+    parser.add_argument("--judge-api-key2", type=str, default=None, help="Judge 2 API key")
+    parser.add_argument("--judge-api-base2", type=str, default=None, help="Judge 2 API base URL")
+    parser.add_argument("--judge-model3", type=str, default=None, help="Judge 3 model name (optional)")
+    parser.add_argument("--judge-api-key3", type=str, default=None, help="Judge 3 API key")
+    parser.add_argument("--judge-api-base3", type=str, default=None, help="Judge 3 API base URL")
     parser.add_argument("--run", action="store_true", help="Run the solver before validating")
     parser.add_argument("--output-dir", type=str, default="outputs/regression")
     parser.add_argument("--model", type=str, default="gpt-4o-mini")

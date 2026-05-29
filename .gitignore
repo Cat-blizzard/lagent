@@ -5,3 +5,7 @@ __pycache__/
 outputs/
 *.log
 .env
+*.json
+!math_prove/validation/*.json
+CLAUDE.md
+lagent.egg-info/
