@@ -110,11 +110,88 @@ class ValidationReport:
 @dataclass
 class LLMJudgeConfig:
     enabled: bool = False
-    api_key: str = ""
-    api_base: str = "https://api.deepseek.com/chat/completions"
-    model: str = "deepseek-v4-flash"
     timeout: int = 60
     judge_all: bool = False
+    judges: List[Dict[str, str]] = field(default_factory=list)
+
+    @classmethod
+    def from_single(cls, model: str, api_key: str, api_base: str, **kwargs) -> "LLMJudgeConfig":
+        return cls(
+            enabled=True,
+            judges=[{"model": model, "api_key": api_key, "api_base": api_base}],
+            **kwargs,
+        )
+
+    def add_judge(self, model: str, api_key: str, api_base: str) -> None:
+        self.judges.append({"model": model, "api_key": api_key, "api_base": api_base})
+
+
+class _GenericLLM:
+    """Minimal OpenAI-compatible chat client, no vendor assumptions."""
+
+    def __init__(self, model: str, api_key: str, api_base: str, timeout: int = 120):
+        self.model = model
+        self.api_key = api_key
+        self.url = api_base or "https://api.openai.com/v1/chat/completions"
+        self.timeout = timeout
+
+    def chat(self, messages: List[Dict[str, str]]) -> str:
+        data: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "n": 1,
+            "temperature": 0.0,
+            "max_tokens": 512,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        resp = requests.post(
+            self.url, headers=headers, data=json.dumps(data), timeout=self.timeout
+        )
+        body = resp.json()
+        if "choices" in body:
+            return str(body["choices"][0]["message"]["content"])
+        if "error" in body:
+            msg = str(body["error"].get("message", body["error"]))
+            if "response_format" in msg.lower() or "json_object" in msg.lower():
+                return self._chat_no_json_mode(messages)
+            raise RuntimeError(msg)
+        raise RuntimeError(resp.text[:200])
+
+    def _chat_no_json_mode(self, messages: List[Dict[str, str]]) -> str:
+        data: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "n": 1,
+            "temperature": 0.0,
+            "max_tokens": 512,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        resp = requests.post(
+            self.url, headers=headers, data=json.dumps(data), timeout=self.timeout
+        )
+        body = resp.json()
+        if "choices" in body:
+            return str(body["choices"][0]["message"]["content"])
+        raise RuntimeError(str(body.get("error", body)))
+
+
+JUDGE_SYSTEM_PROMPT = (
+    "You are a strict mathematical answer judge. Given a math problem and a "
+    "proposed answer, determine whether the answer is mathematically correct. "
+    "For proof problems: check whether the answer states the correct conclusion. "
+    "Ignore superficial formatting (LaTeX vs plain text, bracket styles, "
+    "whitespace, Unicode). Do not penalize the answer for being concise — a "
+    "one-sentence conclusion is acceptable even for a proof problem, as long "
+    "as it correctly identifies what was to be proved. "
+    "Return only JSON with keys: correct, confidence, reason."
+)
 
 
 def load_result_file(path: str) -> List[Dict[str, Any]]:
@@ -240,7 +317,7 @@ def validate_results(
 
             if llm_judge and llm_judge.enabled:
                 judge = judge_answer_with_llm(
-                    problem=str(exp.get("problem_text") or exp.get("question") or ""),
+                    problem=str(exp.get("problem_text") or exp.get("question") or exp.get("problem") or ""),
                     prediction=solution.answer,
                     expected=expected_answer,
                     answer_type=answer_type,
@@ -261,9 +338,111 @@ def validate_results(
                         if item.llm_judge_reason:
                             item.issues.append(f"LLM judge reason: {item.llm_judge_reason}")
 
+        # Progress
+        if llm_judge and llm_judge.enabled:
+            jc = "✓" if item.llm_judge_correct else ("?" if item.llm_judge_correct is None else "✗")
+        else:
+            jc = "✓" if item.answer_equivalent else "✗"
+        print(f"  [{index}/{report.total}] {pid}  local={'✓' if item.answer_equivalent else '✗'}  judge={jc}")
+
         report.items.append(item)
 
     return report
+
+
+def _call_one_judge(
+    problem: str,
+    prediction: Any,
+    llm: _GenericLLM,
+) -> Optional[Dict[str, Any]]:
+    """Call a single judge model, returning its verdict or None on error."""
+    try:
+        messages = [
+            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "problem": problem,
+                        "answer": str(prediction or ""),
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        raw = llm.chat(messages)
+        parsed = _parse_judge_json(raw)
+        return {
+            "correct": bool(parsed.get("correct")),
+            "confidence": _clamp_float(parsed.get("confidence", 0.0)),
+            "reason": str(parsed.get("reason", ""))[:500],
+        }
+    except Exception as exc:
+        return None
+
+
+def _multi_judge(
+    problem: str,
+    prediction: Any,
+    config: LLMJudgeConfig,
+    local_equivalent: bool = False,
+) -> Dict[str, Any]:
+    """Judge with local equivalence shortcut + optional multi-model voting."""
+    if local_equivalent and not config.judge_all:
+        return {
+            "correct": True,
+            "confidence": 1.0,
+            "reason": "Accepted by local equivalence check.",
+            "method": "local_equivalence_shortcut",
+        }
+
+    if not config.judges:
+        return {
+            "correct": None,
+            "confidence": 0.0,
+            "reason": "No LLM judge configured.",
+            "method": "skipped_no_judge",
+        }
+
+    llms = [
+        _GenericLLM(model=j["model"], api_key=j["api_key"], api_base=j.get("api_base", ""), timeout=config.timeout)
+        for j in config.judges
+    ]
+
+    results: List[Optional[Dict[str, Any]]] = []
+    for llm in llms:
+        results.append(_call_one_judge(problem, prediction, llm))
+
+    correct_votes = sum(1 for r in results if r is not None and r["correct"])
+    valid = sum(1 for r in results if r is not None)
+    passed = correct_votes > valid / 2 if valid > 0 else False
+    confidences = [r["confidence"] for r in results if r is not None]
+    avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+    reasons = [r["reason"] for r in results if r is not None and r["reason"]]
+    models_used = [j["model"] for j in config.judges]
+
+    individual = []
+    for idx, (judge_cfg, r) in enumerate(zip(config.judges, results)):
+        individual.append({
+            "judge": judge_cfg["model"],
+            "correct": r["correct"] if r else None,
+            "confidence": r["confidence"] if r else None,
+            "error": None if r else "judge_call_failed",
+        })
+
+    return {
+        "correct": passed,
+        "confidence": round(avg_conf, 4),
+        "reason": "; ".join(reasons[:3]) if reasons else "multi-judge vote",
+        "method": f"multi_judge:{','.join(models_used)}",
+        "voting_detail": {
+            "judges": len(llms),
+            "valid": valid,
+            "correct_votes": correct_votes,
+            "majority_correct": passed,
+            "individual": individual,
+        },
+    }
 
 
 def judge_answer_with_llm(
@@ -274,90 +453,7 @@ def judge_answer_with_llm(
     config: LLMJudgeConfig,
     local_equivalent: bool = False,
 ) -> Dict[str, Any]:
-    if local_equivalent and not config.judge_all:
-        return {
-            "correct": True,
-            "confidence": 1.0,
-            "reason": "Accepted by local equivalence check.",
-            "method": "local_equivalence_shortcut",
-        }
-
-    if not config.api_key:
-        return {
-            "correct": None,
-            "confidence": 0.0,
-            "reason": "LLM judge API key is missing.",
-            "method": "skipped_missing_api_key",
-        }
-
-    endpoint = _normalize_chat_endpoint(config.api_base)
-    payload = {
-        "model": config.model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict but format-tolerant mathematical answer judge. "
-                    "Decide whether the predicted answer is mathematically equivalent "
-                    "to the reference answer for the given problem. Ignore superficial "
-                    "formatting differences such as square brackets vs curly braces, "
-                    "LaTeX vs plain text, whitespace, equivalent fractions/decimals, "
-                    "and ordering of set elements when order is irrelevant. Do not "
-                    "penalize format unless it changes the mathematical meaning. "
-                    "Return only JSON with keys: correct, confidence, reason."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "problem": problem,
-                        "answer_type": answer_type,
-                        "reference_answer": expected,
-                        "predicted_answer": prediction,
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-        ],
-        "temperature": 0,
-        "max_tokens": 512,
-        "stream": False,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {config.api_key}",
-    }
-    try:
-        response = requests.post(
-            endpoint,
-            headers=headers,
-            data=json.dumps(payload, ensure_ascii=False),
-            timeout=config.timeout,
-        )
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        parsed = _parse_judge_json(content)
-        return {
-            "correct": bool(parsed.get("correct")),
-            "confidence": _clamp_float(parsed.get("confidence", 0.0)),
-            "reason": str(parsed.get("reason", ""))[:500],
-            "method": f"llm_judge:{config.model}",
-        }
-    except Exception as exc:
-        return {
-            "correct": None,
-            "confidence": 0.0,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "method": "llm_judge_error",
-        }
-
-
-def _normalize_chat_endpoint(api_base: str) -> str:
-    base = (api_base or "").rstrip("/")
-    if base.endswith("/chat/completions"):
-        return base
-    return base + "/chat/completions"
+    return _multi_judge(problem, prediction, config, local_equivalent)
 
 
 def _parse_judge_json(text: str) -> Dict[str, Any]:
